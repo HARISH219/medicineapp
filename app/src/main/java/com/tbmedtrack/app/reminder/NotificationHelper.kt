@@ -1,0 +1,239 @@
+package com.tbmedtrack.app.reminder
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.tbmedtrack.app.MainActivity
+import com.tbmedtrack.app.R
+
+/**
+ * Builds and posts medication reminder notifications with Mark-as-Taken and Snooze actions.
+ * A dose event is identified by (timeMinutes, scheduledMillis); the notification id is derived
+ * from the scheduled time so repeated fires update the same notification.
+ */
+object NotificationHelper {
+
+    fun ensureChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val mgr = context.getSystemService(NotificationManager::class.java)
+            if (mgr.getNotificationChannel(ReminderKeys.CHANNEL_ID) == null) {
+                val channel = NotificationChannel(
+                    ReminderKeys.CHANNEL_ID,
+                    ReminderKeys.CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Reminders for your scheduled medicines"
+                    enableVibration(true)
+                    setShowBadge(true)
+                }
+                mgr.createNotificationChannel(channel)
+            }
+            if (mgr.getNotificationChannel(ReminderKeys.CRITICAL_CHANNEL_ID) == null) {
+                val critical = NotificationChannel(
+                    ReminderKeys.CRITICAL_CHANNEL_ID,
+                    ReminderKeys.CRITICAL_CHANNEL_NAME,
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Critical alarm when a required dose has not been recorded"
+                    enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 500, 300, 500, 300, 500)
+                    setBypassDnd(true)
+                    setShowBadge(true)
+                    lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                }
+                mgr.createNotificationChannel(critical)
+            }
+        }
+    }
+
+    fun notificationIdFor(scheduledMillis: Long): Int =
+        (scheduledMillis / 60000L).toInt()
+
+    fun showDoseReminder(
+        context: Context,
+        title: String,
+        body: String,
+        medicineId: Long,
+        scheduleId: Long,
+        scheduledMillis: Long,
+        timeMinutes: Int,
+        sound: Boolean,
+        vibration: Boolean
+    ) {
+        ensureChannel(context)
+        val notifId = notificationIdFor(scheduledMillis)
+
+        val contentIntent = PendingIntent.getActivity(
+            context, notifId,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val takenIntent = actionPending(
+            context, ReminderKeys.ACTION_MARK_TAKEN, notifId,
+            medicineId, scheduleId, scheduledMillis, timeMinutes, notifId
+        )
+        val snoozeIntent = actionPending(
+            context, ReminderKeys.ACTION_SNOOZE, notifId + 100000,
+            medicineId, scheduleId, scheduledMillis, timeMinutes, notifId
+        )
+
+        val builder = NotificationCompat.Builder(context, ReminderKeys.CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+            .addAction(R.drawable.ic_check, "Mark as Taken", takenIntent)
+            .addAction(R.drawable.ic_snooze, "Snooze", snoozeIntent)
+
+        if (!sound && !vibration) {
+            builder.setSilent(true)
+        } else {
+            var defaults = 0
+            if (sound) defaults = defaults or NotificationCompat.DEFAULT_SOUND
+            if (vibration) defaults = defaults or NotificationCompat.DEFAULT_VIBRATE
+            builder.setDefaults(defaults)
+        }
+
+        if (hasNotificationPermission(context)) {
+            NotificationManagerCompat.from(context).notify(notifId, builder.build())
+        }
+    }
+
+    fun cancel(context: Context, scheduledMillis: Long) {
+        NotificationManagerCompat.from(context).cancel(notificationIdFor(scheduledMillis))
+    }
+
+    fun cancelCritical(context: Context) {
+        NotificationManagerCompat.from(context).cancel(ReminderKeys.CRITICAL_NOTIFICATION_ID)
+    }
+
+    /**
+     * Show the escalating critical alert for a required morning dose. [escalation] 0 is the
+     * first (10 AM) reminder; >=1 is critical escalation (11 AM onward). Uses a full-screen
+     * intent so the red alert can appear over the lock screen where the OS permits it.
+     */
+    fun showCriticalDoseAlert(
+        context: Context,
+        epochDay: Long,
+        timeMinutes: Int,
+        scheduledMillis: Long,
+        medicineNames: List<String>,
+        escalation: Int,
+        sound: Boolean,
+        vibration: Boolean
+    ) {
+        ensureChannel(context)
+
+        val fullScreenIntent = Intent(context, CriticalAlertActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            putExtra(ReminderKeys.EXTRA_EPOCH_DAY, epochDay)
+            putExtra(ReminderKeys.EXTRA_TIME_MINUTES, timeMinutes)
+            putExtra(ReminderKeys.EXTRA_SCHEDULED_MILLIS, scheduledMillis)
+            putExtra(ReminderKeys.EXTRA_ESCALATION, escalation)
+        }
+        val fullScreenPending = PendingIntent.getActivity(
+            context, 900000 + timeMinutes, fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val takenIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+            action = ReminderKeys.ACTION_MARK_EVENT_TAKEN
+            putExtra(ReminderKeys.EXTRA_EPOCH_DAY, epochDay)
+            putExtra(ReminderKeys.EXTRA_TIME_MINUTES, timeMinutes)
+            putExtra(ReminderKeys.EXTRA_SCHEDULED_MILLIS, scheduledMillis)
+            putExtra(ReminderKeys.EXTRA_NOTIFICATION_ID, ReminderKeys.CRITICAL_NOTIFICATION_ID)
+        }
+        val takenPending = PendingIntent.getBroadcast(
+            context, 910000 + timeMinutes, takenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val critical = escalation >= 1
+        val title = if (critical) "🚨 MEDICATION NOT RECORDED" else "💊 Medicine time"
+        val count = medicineNames.size
+        val body = buildString {
+            if (critical) {
+                append("Your ")
+                append(com.tbmedtrack.app.util.ScheduleUtil.formatTime(timeMinutes))
+                append(" medication has not been recorded as taken.\n")
+            } else {
+                append("Today's TB medication combination is ready.\n")
+            }
+            append("Today's combination: $count ${if (count == 1) "medicine" else "medicines"}")
+            if (medicineNames.isNotEmpty()) {
+                append("\n")
+                append(medicineNames.joinToString("\n") { "• $it" })
+            }
+        }
+
+        val builder = NotificationCompat.Builder(context, ReminderKeys.CRITICAL_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(title)
+            .setContentText("Today's combination: $count medicines")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setOngoing(true)              // cannot be casually swiped away
+            .setAutoCancel(false)          // dismissing never means "taken"
+            .setContentIntent(fullScreenPending)
+            .addAction(R.drawable.ic_check, "MEDICINE TAKEN", takenPending)
+
+        if (critical) {
+            builder.setFullScreenIntent(fullScreenPending, true)
+        }
+        if (sound || vibration) {
+            var defaults = 0
+            if (sound) defaults = defaults or NotificationCompat.DEFAULT_SOUND
+            if (vibration) defaults = defaults or NotificationCompat.DEFAULT_VIBRATE
+            builder.setDefaults(defaults)
+        }
+
+        if (hasNotificationPermission(context)) {
+            NotificationManagerCompat.from(context)
+                .notify(ReminderKeys.CRITICAL_NOTIFICATION_ID, builder.build())
+        }
+    }
+
+    private fun actionPending(
+        context: Context,
+        action: String,
+        requestCode: Int,
+        medicineId: Long,
+        scheduleId: Long,
+        scheduledMillis: Long,
+        timeMinutes: Int,
+        notificationId: Int
+    ): PendingIntent {
+        val intent = Intent(context, NotificationActionReceiver::class.java).apply {
+            this.action = action
+            putExtra(ReminderKeys.EXTRA_MEDICINE_ID, medicineId)
+            putExtra(ReminderKeys.EXTRA_SCHEDULE_ID, scheduleId)
+            putExtra(ReminderKeys.EXTRA_SCHEDULED_MILLIS, scheduledMillis)
+            putExtra(ReminderKeys.EXTRA_TIME_MINUTES, timeMinutes)
+            putExtra(ReminderKeys.EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        return PendingIntent.getBroadcast(
+            context, requestCode, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    fun hasNotificationPermission(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.POST_NOTIFICATIONS
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else true
+    }
+}

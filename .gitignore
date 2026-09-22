@@ -1,0 +1,28 @@
+# --- Android / Gradle ---
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+
+# --- Secrets: never commit ---
+.env
+.env.local
+*.env
+secrets.properties
+*.keystore
+*.jks
+google-services.json
+firebase-service-account.json
+**/firebase-service-account.json
+
+# --- Node backend ---
+backend/node_modules/
+node_modules/
+npm-debug.log*

@@ -1,0 +1,19 @@
+{
+  "name": "tbmedtrack-backend",
+  "version": "1.0.0",
+  "description": "TB MedTrack sync backend: holds the Turso token, exposes an authenticated sync API, and pushes updates to monitor devices via FCM.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
