@@ -1,13 +1,10 @@
-// Vercel serverless entry point. All requests are rewritten here (see vercel.json).
-// Vercel may hand the function a path prefixed with /api or /api/index depending on
-// routing; we normalize req.url back to the real API path before Express handles it,
-// so routes like /health and /v1/events resolve correctly.
+// Vercel serverless entry. vercel.json rewrites every path here. Vercel preserves the
+// original request path in req.url (e.g. "/health", "/v1/events"), so Express routes it
+// directly. We only strip a possible "/api" prefix as a safety net.
 import app from "../app.js";
 
 export default function handler(req, res) {
-  let url = req.url || "/";
-  url = url.replace(/^\/api\/index/, "").replace(/^\/api(?=\/|$)/, "");
-  if (url === "" ) url = "/";
-  req.url = url;
+  if (req.url && req.url.startsWith("/api/")) req.url = req.url.slice(4) || "/";
+  else if (req.url === "/api") req.url = "/";
   return app(req, res);
 }
