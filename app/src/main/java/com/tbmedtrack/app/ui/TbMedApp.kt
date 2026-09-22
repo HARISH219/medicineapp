@@ -53,7 +53,8 @@ fun TbMedApp() {
         currentRoute == Routes.DEVICES ||
         currentRoute == Routes.MONITOR ||
         currentRoute == Routes.TIMELINE ||
-        currentRoute == Routes.IMPORT_HISTORY
+        currentRoute == Routes.IMPORT_HISTORY ||
+        currentRoute == Routes.CLOUD_SYNC
 
     Scaffold(
         topBar = {
@@ -123,7 +124,8 @@ fun TbMedApp() {
                 SettingsScreen(
                     onOpenDevices = { navController.navigate(Routes.DEVICES) },
                     onOpenMonitor = { navController.navigate(Routes.MONITOR) },
-                    onImportHistory = { navController.navigate(Routes.IMPORT_HISTORY) }
+                    onImportHistory = { navController.navigate(Routes.IMPORT_HISTORY) },
+                    onOpenCloudSync = { navController.navigate(Routes.CLOUD_SYNC) }
                 )
             }
             composable(Routes.TREATMENT) {
@@ -132,6 +134,7 @@ fun TbMedApp() {
             composable(Routes.DEVICES) { com.tbmedtrack.app.ui.devices.DevicesScreen() }
             composable(Routes.MONITOR) { com.tbmedtrack.app.ui.monitor.MonitorScreen() }
             composable(Routes.TIMELINE) { com.tbmedtrack.app.ui.timeline.TimelineScreen() }
+            composable(Routes.CLOUD_SYNC) { com.tbmedtrack.app.ui.cloud.CloudSyncScreen() }
             composable(Routes.IMPORT_HISTORY) {
                 com.tbmedtrack.app.ui.setup.SetupScreen(onDone = { navController.popBackStack() })
             }
@@ -175,5 +178,6 @@ private fun topTitle(route: String?): String = when {
     route == Routes.MONITOR -> "Monitor"
     route == Routes.TIMELINE -> "Treatment timeline"
     route == Routes.IMPORT_HISTORY -> "Import history"
+    route == Routes.CLOUD_SYNC -> "Cloud sync"
     else -> "TB MedTrack"
 }

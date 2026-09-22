@@ -23,6 +23,7 @@ object Routes {
     const val MONITOR = "monitor"
     const val IMPORT_HISTORY = "import_history"
     const val TIMELINE = "timeline"
+    const val CLOUD_SYNC = "cloud_sync"
 }
 
 enum class BottomDest(val route: String, val label: String, val icon: ImageVector) {

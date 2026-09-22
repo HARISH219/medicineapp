@@ -22,6 +22,9 @@ interface SyncClient {
     /** Pull events updated since [sinceMillis] from the cloud. */
     suspend fun downloadEvents(sinceMillis: Long): Result<List<MedicationLog>>
 
+    /** Establish this device as PRIMARY and obtain a session token (first connect). */
+    suspend fun bootstrapPrimary(deviceId: String, deviceName: String): Result<Unit>
+
     /** Generate a short-lived device authorization code (primary device). */
     suspend fun createAuthCode(): Result<AuthCode>
 
@@ -42,6 +45,8 @@ class NoopSyncClient : SyncClient {
     override val isConfigured: Boolean = false
     override suspend fun uploadEvents(events: List<MedicationLog>) = Result.success(events.map { it.uuid })
     override suspend fun downloadEvents(sinceMillis: Long) = Result.success(emptyList<MedicationLog>())
+    override suspend fun bootstrapPrimary(deviceId: String, deviceName: String): Result<Unit> =
+        Result.failure(IllegalStateException("No sync backend configured"))
     override suspend fun createAuthCode(): Result<AuthCode> =
         Result.failure(IllegalStateException("No sync backend configured"))
     override suspend fun redeemAuthCode(code: String, deviceName: String): Result<Unit> =

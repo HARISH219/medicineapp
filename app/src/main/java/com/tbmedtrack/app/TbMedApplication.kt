@@ -35,7 +35,8 @@ class TbMedApplication : Application() {
                 // (Re)register reminders and critical escalation chains.
                 ServiceLocator.alarmScheduler(this@TbMedApplication).rescheduleAll()
                 ServiceLocator.criticalAlarmScheduler(this@TbMedApplication).rescheduleTodayAndFuture()
-                // Drain any pending sync.
+                // Pick RemoteSyncClient if a backend URL is configured, then drain pending sync.
+                ServiceLocator.syncManager(this@TbMedApplication).reconfigure()
                 ServiceLocator.syncManager(this@TbMedApplication).syncNow()
             }
         }

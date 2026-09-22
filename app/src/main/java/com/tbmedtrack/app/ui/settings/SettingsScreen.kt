@@ -45,6 +45,7 @@ fun SettingsScreen(
     onOpenDevices: () -> Unit = {},
     onOpenMonitor: () -> Unit = {},
     onImportHistory: () -> Unit = {},
+    onOpenCloudSync: () -> Unit = {},
     vm: SettingsViewModel = viewModel()
 ) {
     val settings by vm.settingsFlow.collectAsStateWithLifecycle()
@@ -194,6 +195,10 @@ fun SettingsScreen(
             SectionCard {
                 Text("Devices & monitoring", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = onOpenCloudSync, modifier = Modifier.fillMaxWidth()) {
+                    Text("Cloud sync")
+                }
+                Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = onOpenDevices, modifier = Modifier.fillMaxWidth()) {
                     Text("Authorized devices")
                 }

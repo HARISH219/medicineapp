@@ -43,6 +43,8 @@ class RemoteSyncClient(private val store: SecureStore) : SyncClient {
     @Serializable private data class UploadRequest(val events: List<EventDto>)
     @Serializable private data class UploadResponse(val accepted: List<String> = emptyList())
     @Serializable private data class DownloadResponse(val events: List<EventDto> = emptyList())
+    @Serializable private data class BootstrapRequest(val deviceId: String, val deviceName: String)
+    @Serializable private data class BootstrapResponse(val sessionToken: String, val userId: String, val role: String)
     @Serializable private data class AuthCodeResponse(val code: String, val expiresAt: Long)
     @Serializable private data class RedeemRequest(val code: String, val deviceName: String)
     @Serializable private data class RedeemResponse(val sessionToken: String)
@@ -63,6 +65,15 @@ class RemoteSyncClient(private val store: SecureStore) : SyncClient {
             runCatching {
                 val resp = get("/v1/events?since=$sinceMillis")
                 json.decodeFromString<DownloadResponse>(resp).events.map { it.toLog() }
+            }
+        }
+
+    override suspend fun bootstrapPrimary(deviceId: String, deviceName: String): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val resp = post("/v1/bootstrap", json.encodeToString(BootstrapRequest(deviceId, deviceName)))
+                val r = json.decodeFromString<BootstrapResponse>(resp)
+                store.sessionToken = r.sessionToken
             }
         }
 

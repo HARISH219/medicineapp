@@ -86,6 +86,38 @@ app.get("/", (_req, res) =>
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+// Bootstrap the PRIMARY device: creates the account (user) on first call and registers
+// this device as PRIMARY, returning a session token. Idempotent per deviceId — calling
+// again returns a fresh session token for the same device/user.
+app.post("/v1/bootstrap", async (req, res) => {
+  const { deviceId, deviceName } = req.body || {};
+  if (!deviceId) return res.status(400).json({ error: "deviceId required" });
+
+  const existing = await db.execute({
+    sql: "SELECT device_id, user_id FROM devices WHERE device_id = ? LIMIT 1",
+    args: [deviceId],
+  });
+  const token = newToken();
+  let userId;
+  if (existing.rows[0]) {
+    userId = existing.rows[0].user_id;
+    await db.execute({
+      sql: "UPDATE devices SET session_token = ?, revoked = 0, last_active_at = ? WHERE device_id = ?",
+      args: [hash(token), Date.now(), deviceId],
+    });
+  } else {
+    userId = crypto.randomUUID();
+    await db.batch([
+      { sql: "INSERT INTO users (id, created_at) VALUES (?, ?)", args: [userId, Date.now()] },
+      {
+        sql: "INSERT INTO devices (device_id,user_id,name,role,session_token,revoked,last_active_at,created_at) VALUES (?,?,?,?,?,0,?,?)",
+        args: [deviceId, userId, deviceName || "My phone", "PRIMARY", hash(token), Date.now(), Date.now()],
+      },
+    ]);
+  }
+  res.json({ sessionToken: token, userId, role: "PRIMARY" });
+});
+
 // Primary device creates a short-lived pairing code.
 app.post("/v1/devices/auth-code", auth, async (req, res) => {
   const code = randomCode();

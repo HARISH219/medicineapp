@@ -25,6 +25,23 @@ class SyncManager(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
 
+    private val secureStore by lazy { SecureStore(context) }
+
+    /**
+     * Choose the active client based on stored config: if a backend URL is present, use the
+     * real [RemoteSyncClient]; otherwise stay local-only with [NoopSyncClient]. Call on app
+     * start and whenever the backend URL changes.
+     */
+    fun reconfigure() {
+        client = if (!secureStore.baseUrl.isNullOrBlank()) {
+            RemoteSyncClient(secureStore)
+        } else {
+            NoopSyncClient()
+        }
+    }
+
+    fun secureStore(): SecureStore = secureStore
+
     /** Queue a just-recorded event for upload. Safe to call from any thread. */
     fun queue() {
         scope.launch { runCatching { syncNow() } }
