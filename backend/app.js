@@ -27,9 +27,14 @@ if (!TURSO_DATABASE_URL || !TURSO_AUTH_TOKEN) {
 
 const db = createClient({ url: TURSO_DATABASE_URL, authToken: TURSO_AUTH_TOKEN });
 
-// Optional FCM (lazy: only if a credentials path is provided).
+// Optional FCM — initialized lazily on first push so there is NO top-level await
+// (top-level await can break serverless bundling on some platforms).
 let messaging = null;
-if (GOOGLE_APPLICATION_CREDENTIALS) {
+let fcmInitTried = false;
+async function getMessaging() {
+  if (fcmInitTried) return messaging;
+  fcmInitTried = true;
+  if (!GOOGLE_APPLICATION_CREDENTIALS) return null;
   try {
     const admin = await import("firebase-admin");
     admin.default.initializeApp({ credential: admin.default.credential.applicationDefault() });
@@ -38,6 +43,7 @@ if (GOOGLE_APPLICATION_CREDENTIALS) {
   } catch (e) {
     console.warn("FCM not initialized:", e.message);
   }
+  return messaging;
 }
 
 const app = express();
@@ -176,7 +182,8 @@ async function upsertEvent(userId, e) {
 }
 
 async function notifyMonitors(userId, e) {
-  if (!messaging) return;
+  const msg = await getMessaging();
+  if (!msg) return;
   const rows = await db.execute({
     sql: "SELECT fcm_token FROM devices WHERE user_id = ? AND role = 'MONITOR' AND revoked = 0 AND fcm_token IS NOT NULL",
     args: [userId],
@@ -184,7 +191,7 @@ async function notifyMonitors(userId, e) {
   const tokens = rows.rows.map((r) => r.fcm_token).filter(Boolean);
   if (!tokens.length) return;
   const taken = e.status === "TAKEN";
-  await messaging.sendEachForMulticast({
+  await msg.sendEachForMulticast({
     tokens,
     data: { type: taken ? "taken" : "not_recorded", uuid: e.uuid, status: e.status },
     notification: {
