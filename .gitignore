@@ -26,3 +26,8 @@ firebase-service-account.json
 backend/node_modules/
 node_modules/
 npm-debug.log*
+
+# Your filled-in credentials (never commit). Only the *.template is tracked.
+CREDENTIALS.txt
+backend/.env
+DEPLOY_SECRETS.txt
