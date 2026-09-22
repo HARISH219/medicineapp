@@ -75,6 +75,15 @@ async function auth(req, res, next) {
   next();
 }
 
+// Root page — visiting the base URL shows a simple status so you can confirm it's live.
+app.get("/", (_req, res) =>
+  res.json({
+    service: "TB MedTrack sync backend",
+    status: "ok",
+    endpoints: ["/health", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events"],
+  })
+);
+
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 // Primary device creates a short-lived pairing code.
