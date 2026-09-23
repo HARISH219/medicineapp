@@ -54,6 +54,8 @@ fun SettingsScreen(
     val context = LocalContext.current
     var showDelete by remember { mutableStateOf(false) }
     var pendingImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var showCustomStartDelay by remember { mutableStateOf(false) }
+    var showCustomRepeat by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -70,10 +72,14 @@ fun SettingsScreen(
         }
     }
 
+    // Reserve space so the last card can scroll fully clear of the floating bottom nav
+    // plus the Android gesture / navigation-bar inset. Adapts to every device.
+    val bottomReserve = com.tbmedtrack.app.ui.components.bottomNavContentPadding()
+
     LazyColumn(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 96.dp)
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = bottomReserve)
     ) {
         item { Text("Settings", style = MaterialTheme.typography.headlineMedium) }
 
@@ -145,26 +151,44 @@ fun SettingsScreen(
                 Spacer(Modifier.height(10.dp))
                 Text("Start critical alarm after", style = MaterialTheme.typography.bodyLarge)
                 Spacer(Modifier.height(6.dp))
+                val startPresets = listOf(15, 30, 45, 60, 120)
                 androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(15, 30, 45, 60, 120, 180).forEach { m ->
+                    startPresets.forEach { m ->
                         FilterChip(
                             selected = settings.criticalStartDelayMinutes == m,
                             onClick = { vm.setCriticalStartDelay(m) },
                             label = { Text(minutesLabel(m)) }
                         )
                     }
+                    val startIsCustom = settings.criticalStartDelayMinutes !in startPresets
+                    FilterChip(
+                        selected = startIsCustom,
+                        onClick = { showCustomStartDelay = true },
+                        label = {
+                            Text(if (startIsCustom) "Custom (${minutesLabel(settings.criticalStartDelayMinutes)})" else "Custom")
+                        }
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 Text("Repeat critical alarm every", style = MaterialTheme.typography.bodyLarge)
                 Spacer(Modifier.height(6.dp))
+                val repeatPresets = listOf(30, 45, 60, 120)
                 androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(30, 45, 60, 120).forEach { m ->
+                    repeatPresets.forEach { m ->
                         FilterChip(
                             selected = settings.escalationIntervalMinutes == m,
                             onClick = { vm.setEscalationInterval(m) },
                             label = { Text(minutesLabel(m)) }
                         )
                     }
+                    val repeatIsCustom = settings.escalationIntervalMinutes !in repeatPresets
+                    FilterChip(
+                        selected = repeatIsCustom,
+                        onClick = { showCustomRepeat = true },
+                        label = {
+                            Text(if (repeatIsCustom) "Custom (${minutesLabel(settings.escalationIntervalMinutes)})" else "Custom")
+                        }
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 SwitchRow("Reduce motion (no flashing alert)", settings.reduceMotion) { vm.setReduceMotion(it) }
@@ -322,6 +346,62 @@ fun SettingsScreen(
             dismissButton = { TextButton(onClick = { pendingImportUri = null }) { Text("Cancel") } }
         )
     }
+
+    if (showCustomStartDelay) {
+        CustomMinutesDialog(
+            title = "Start critical alarm after",
+            initial = settings.criticalStartDelayMinutes,
+            onConfirm = { vm.setCriticalStartDelay(it); showCustomStartDelay = false },
+            onDismiss = { showCustomStartDelay = false }
+        )
+    }
+
+    if (showCustomRepeat) {
+        CustomMinutesDialog(
+            title = "Repeat critical alarm every",
+            initial = settings.escalationIntervalMinutes,
+            onConfirm = { vm.setEscalationInterval(it); showCustomRepeat = false },
+            onDismiss = { showCustomRepeat = false }
+        )
+    }
+}
+
+/** Dialog to enter a custom number of minutes (1–720). */
+@Composable
+private fun CustomMinutesDialog(
+    title: String,
+    initial: Int,
+    onConfirm: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var text by remember { mutableStateOf(initial.toString()) }
+    val parsed = text.toIntOrNull()
+    val valid = parsed != null && parsed in 1..720
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text("Enter minutes (1–720).", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { new -> text = new.filter { it.isDigit() }.take(3) },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                    ),
+                    suffix = { Text("min") },
+                    isError = text.isNotEmpty() && !valid
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = valid, onClick = { parsed?.let(onConfirm) }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 private fun minutesLabel(m: Int): String = when {

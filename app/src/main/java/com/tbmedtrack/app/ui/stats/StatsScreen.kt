@@ -51,7 +51,10 @@ fun StatsScreen(vm: StatsViewModel = viewModel()) {
     LazyColumn(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 96.dp)
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = 12.dp,
+            bottom = com.tbmedtrack.app.ui.components.bottomNavContentPadding()
+        )
     ) {
         item { AdherenceCard(state.monthLabel, stats) }
         item { StreakCard(stats) }

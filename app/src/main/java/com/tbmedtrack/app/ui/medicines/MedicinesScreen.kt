@@ -73,7 +73,10 @@ fun MedicinesScreen(
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 96.dp)
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            top = 12.dp,
+            bottom = com.tbmedtrack.app.ui.components.bottomNavContentPadding()
+        )
     ) {
         val tb = meds.filter { it.medicine.partOfTbRegimen }
         val other = meds.filter { !it.medicine.partOfTbRegimen }

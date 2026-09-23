@@ -73,6 +73,7 @@ fun CalendarScreen(vm: CalendarViewModel = viewModel()) {
         MonthGrid(state) { day -> vm.selectDay(day) }
         Spacer(Modifier.height(16.dp))
         Legend()
+        Spacer(Modifier.height(com.tbmedtrack.app.ui.components.bottomNavContentPadding()))
     }
 
     if (state.selectedDay != null) {
