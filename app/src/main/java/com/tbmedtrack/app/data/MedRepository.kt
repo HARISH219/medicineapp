@@ -26,8 +26,12 @@ class MedRepository(
     private val medicineDao: MedicineDao,
     private val logDao: LogDao,
     private val auditDao: com.tbmedtrack.app.data.db.AuditDao,
-    private val syncOperationDao: com.tbmedtrack.app.data.db.SyncOperationDao
+    private val syncOperationDao: com.tbmedtrack.app.data.db.SyncOperationDao,
+    private val phaseDao: com.tbmedtrack.app.data.db.PhaseDao
 ) {
+
+    /** Cache of phases per medicine for a single getDosesForDay pass. */
+    suspend fun phasesFor(medicineId: Long) = phaseDao.forMedicine(medicineId)
 
     /** grace window (minutes) after scheduled time before a dose counts as due/missed. */
     private val missedCutoffMinutes = 60
@@ -65,6 +69,14 @@ class MedRepository(
         return id
     }
 
+    /** Replace the phase set for a medicine (used when configuring a phased prescription). */
+    suspend fun savePhases(medicineId: Long, phases: List<com.tbmedtrack.app.data.db.MedicationPhase>) {
+        phaseDao.deleteForMedicine(medicineId)
+        phases.forEachIndexed { i, p ->
+            phaseDao.insert(p.copy(id = 0, medicineId = medicineId, orderIndex = i))
+        }
+    }
+
     suspend fun setActive(medicineId: Long, active: Boolean) =
         medicineDao.setActive(medicineId, active)
 
@@ -84,16 +96,37 @@ class MedRepository(
 
         for (mws in meds) {
             val med = mws.medicine
+            // Phased medicines (Bedaquiline etc.) are driven by the ScheduleEngine, which
+            // decides whether a dose is scheduled today and the exact tablet count.
+            val phases = phaseDao.forMedicine(med.id)
+            val phased = phases.isNotEmpty()
+            val eval = if (phased) ScheduleEngine.evaluate(med, phases, date) else null
+
             for (sch in mws.schedules) {
-                if (!ScheduleUtil.appliesOn(med, sch, date)) continue
                 val scheduledMillis = ScheduleUtil.toEpochMillis(date, sch.timeMinutes)
                 val existing = logs.firstOrNull {
                     it.medicineId == med.id && it.scheduleId == sch.id &&
                         it.scheduledDateTime == scheduledMillis
                 }
+
+                // Decide if this dose occurs today.
+                val occursToday = if (phased) eval!!.scheduled
+                else ScheduleUtil.appliesOn(med, sch, date)
+
+                // A non-scheduled phased day still surfaces if it was historically logged
+                // (so history/edits remain consistent); otherwise skip it entirely (no reminder).
+                if (!occursToday && existing == null) continue
+
+                val tablets = when {
+                    existing != null && existing.tabletsScheduled > 0 -> existing.tabletsScheduled
+                    phased -> eval!!.tablets
+                    else -> 0
+                }
+                val phaseName = existing?.phaseName?.ifBlank { eval?.phaseName ?: "" } ?: (eval?.phaseName ?: "")
+                val doseText = if (tablets > 0) "$tablets ${if (tablets == 1) "tablet" else "tablets"}"
+                else "${med.dose} ${med.unit}"
+
                 val status = existing?.status ?: run {
-                    // Only days at/after tracking start can become missed. Earlier unlogged
-                    // days are left SCHEDULED (shown as not-tracked, never "missed").
                     val trackedDay = trackingStartDay == 0L || epochDay >= trackingStartDay
                     val cutoff = scheduledMillis + missedCutoffMinutes * 60_000L
                     if (trackedDay && now > cutoff) DoseStatus.MISSED else DoseStatus.SCHEDULED
@@ -102,8 +135,7 @@ class MedRepository(
                     medicineId = med.id,
                     scheduleId = sch.id,
                     medicineName = existing?.medicineName?.ifBlank { med.name } ?: med.name,
-                    doseText = existing?.doseText?.ifBlank { "${med.dose} ${med.unit}" }
-                        ?: "${med.dose} ${med.unit}",
+                    doseText = existing?.doseText?.ifBlank { doseText } ?: doseText,
                     timeMinutes = sch.timeMinutes,
                     scheduledMillis = scheduledMillis,
                     epochDay = epochDay,
@@ -115,11 +147,23 @@ class MedRepository(
                     logId = existing?.id,
                     historical = existing?.historical ?: false,
                     takenTimePrecision = existing?.takenTimePrecision
-                        ?: com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT
+                        ?: com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT,
+                    tabletsScheduled = tablets,
+                    phaseName = phaseName,
+                    treatmentDay = eval?.treatmentDay ?: 0,
+                    phaseDayCount = eval?.phaseDayCount
                 )
             }
         }
         return result.sortedWith(compareBy({ it.timeMinutes }, { it.medicineName }))
+    }
+
+    /** Next scheduled dose (date + tablets) for a phased medicine after today. */
+    suspend fun nextScheduledDoseFor(medicineId: Long, fromDate: LocalDate): ScheduleEngine.NextDose? {
+        val med = medicineDao.getMedicine(medicineId) ?: return null
+        val phases = phaseDao.forMedicine(medicineId)
+        if (phases.isEmpty()) return null
+        return ScheduleEngine.nextScheduledDose(med, phases, fromDate)
     }
 
     /** Group doses that share the same clock time into dose events. */
@@ -363,6 +407,8 @@ class MedRepository(
         snoozeCount = dose.snoozeCount,
         medicineName = dose.medicineName,
         doseText = dose.doseText,
+        tabletsScheduled = dose.tabletsScheduled,
+        phaseName = dose.phaseName,
         notes = dose.notes
     )
 

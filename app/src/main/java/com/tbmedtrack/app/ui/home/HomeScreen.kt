@@ -130,6 +130,10 @@ fun HomeScreen(
             }
         }
 
+        items(state.notScheduledToday, key = { it.medicineName }) { info ->
+            NotScheduledCard(info)
+        }
+
         if (state.combinationCount > 0) {
             item { CombinationCard(state.combinationCount, state.morningCombination) }
         }
@@ -251,6 +255,23 @@ private fun ActionRequiredCard(combination: DoseEvent, onTaken: () -> Unit) {
                 )
             ) { Text("MEDICINE TAKEN", fontWeight = FontWeight.Bold) }
         }
+    }
+}
+
+@Composable
+private fun NotScheduledCard(info: com.tbmedtrack.app.ui.home.NotScheduledInfo) {
+    SectionCard {
+        Text("💊 ${info.medicineName}", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text("NOT SCHEDULED TODAY",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(8.dp))
+        Text("Next dose", style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("${info.nextDateLabel} • ${info.nextTablets} ${if (info.nextTablets == 1) "tablet" else "tablets"}",
+            style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
     }
 }
 

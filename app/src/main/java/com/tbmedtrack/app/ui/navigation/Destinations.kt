@@ -24,6 +24,7 @@ object Routes {
     const val IMPORT_HISTORY = "import_history"
     const val TIMELINE = "timeline"
     const val CLOUD_SYNC = "cloud_sync"
+    const val PHASE_PREVIEW = "phase_preview" // /{id}
 }
 
 enum class BottomDest(val route: String, val label: String, val icon: ImageVector) {

@@ -9,9 +9,9 @@ import androidx.room.TypeConverters
 @Database(
     entities = [
         Medicine::class, DoseSchedule::class, MedicationLog::class, Device::class,
-        MedicationEventAudit::class, SyncOperation::class
+        MedicationEventAudit::class, SyncOperation::class, MedicationPhase::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -22,6 +22,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun deviceDao(): DeviceDao
     abstract fun auditDao(): AuditDao
     abstract fun syncOperationDao(): SyncOperationDao
+    abstract fun phaseDao(): PhaseDao
 
     companion object {
         @Volatile

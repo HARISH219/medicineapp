@@ -42,7 +42,15 @@ data class HomeUiState(
     /** completed vs total medication *events* today (morning counts as one, night one) */
     val eventsCompleted: Int = 0,
     val eventsTotal: Int = 0,
-    val todayComplete: Boolean = false
+    val todayComplete: Boolean = false,
+    /** phased medicines NOT scheduled today, with their next dose info */
+    val notScheduledToday: List<NotScheduledInfo> = emptyList()
+)
+
+data class NotScheduledInfo(
+    val medicineName: String,
+    val nextDateLabel: String,
+    val nextTablets: Int
 )
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
@@ -58,6 +66,25 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             val today = ScheduleUtil.today()
             val doses = repo.getDosesForDay(today)
             val events = repo.groupIntoEvents(doses)
+
+            // Phased medicines that are NOT scheduled today -> show next-dose info.
+            val medsWithSchedules = repo.getAllMedicinesWithSchedules()
+            val scheduledMedIds = doses.map { it.medicineId }.toSet()
+            val notScheduled = mutableListOf<NotScheduledInfo>()
+            for (mws in medsWithSchedules) {
+                if (!mws.medicine.active) continue
+                if (mws.medicine.id in scheduledMedIds) continue
+                val phases = repo.phasesFor(mws.medicine.id)
+                if (phases.isEmpty()) continue // only phased meds get the not-scheduled card
+                val started = today.toEpochDay() >= mws.medicine.startDate
+                if (!started) continue
+                val next = repo.nextScheduledDoseFor(mws.medicine.id, today) ?: continue
+                notScheduled += NotScheduledInfo(
+                    medicineName = mws.medicine.name,
+                    nextDateLabel = next.date.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() },
+                    nextTablets = next.tablets
+                )
+            }
             val total = doses.size
             val taken = doses.count { it.status == DoseStatus.TAKEN }
             val remaining = total - taken
@@ -122,7 +149,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 combinationCount = morning?.totalCount ?: 0,
                 eventsCompleted = eventsCompleted,
                 eventsTotal = eventsTotal,
-                todayComplete = todayComplete
+                todayComplete = todayComplete,
+                notScheduledToday = notScheduled
             )
         }
     }

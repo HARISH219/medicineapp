@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MedicalServices
@@ -41,12 +43,44 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun TreatmentScreen(
     onOpenTimeline: () -> Unit = {},
+    onViewSchedule: (Long) -> Unit = {},
     medsVm: MedicinesViewModel = viewModel(),
     homeVm: HomeViewModel = viewModel()
 ) {
     val meds by medsVm.medicines.collectAsStateWithLifecycle()
     val home by homeVm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { homeVm.refresh() }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val phaseCards by androidx.compose.runtime.produceState(
+        initialValue = emptyList<PhaseCardInfo>(), meds
+    ) {
+        val repo = com.tbmedtrack.app.ServiceLocator.medRepository(context)
+        val today = ScheduleUtil.today()
+        val list = mutableListOf<PhaseCardInfo>()
+        for (mws in meds) {
+            val phases = repo.phasesFor(mws.medicine.id)
+            if (phases.isEmpty()) continue
+            val eval = com.tbmedtrack.app.data.ScheduleEngine.evaluate(mws.medicine, phases, today)
+            val lines = phases.map { p ->
+                val range = if (p.endDay != null) "Days ${p.startDay}-${p.endDay}" else "Day ${p.startDay}+"
+                val sched = if (p.scheduleType == com.tbmedtrack.app.data.db.PhaseScheduleType.WEEKLY_DAYS)
+                    com.tbmedtrack.app.data.ScheduleEngine.daysLabel(p.daysOfWeek) else "Daily"
+                "${p.phaseName}: $range · $sched · ${p.tabletsPerDose} ${if (p.tabletsPerDose == 1) "tablet" else "tablets"}"
+            }
+            list += PhaseCardInfo(
+                medicineId = mws.medicine.id,
+                medicineName = mws.medicine.name,
+                currentPhase = eval.phaseName.ifBlank { "—" },
+                treatmentDay = eval.treatmentDay,
+                phaseDayCount = eval.phaseDayCount,
+                todayTablets = eval.tablets,
+                scheduledToday = eval.scheduled,
+                phaseLines = lines
+            )
+        }
+        value = list
+    }
 
     val tbMeds = meds.filter { it.medicine.partOfTbRegimen }
 
@@ -103,6 +137,8 @@ fun TreatmentScreen(
             }
         }
 
+        items(phaseCards) { pc -> PhaseCard(pc, onViewSchedule = onViewSchedule) }
+
         item {
             Text(
                 "TB MedTrack does not decide which medicines or doses are correct. " +
@@ -111,6 +147,47 @@ fun TreatmentScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+private data class PhaseCardInfo(
+    val medicineId: Long,
+    val medicineName: String,
+    val currentPhase: String,
+    val treatmentDay: Int,
+    val phaseDayCount: Int?,
+    val todayTablets: Int,
+    val scheduledToday: Boolean,
+    val phaseLines: List<String>
+)
+
+@Composable
+private fun PhaseCard(pc: PhaseCardInfo, onViewSchedule: (Long) -> Unit) {
+    SectionCard {
+        Text(pc.medicineName.uppercase(), style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(4.dp))
+        val dayLabel = if (pc.phaseDayCount != null) "Day ${pc.treatmentDay} / ${pc.phaseDayCount}"
+        else "Day ${pc.treatmentDay}"
+        Text("${pc.currentPhase} · $dayLabel", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (pc.scheduledToday) "Today's dose: ${pc.todayTablets} ${if (pc.todayTablets == 1) "tablet" else "tablets"}"
+            else "Not scheduled today",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.height(10.dp))
+        pc.phaseLines.forEach {
+            Text(it, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(10.dp))
+        androidx.compose.material3.OutlinedButton(
+            onClick = { onViewSchedule(pc.medicineId) },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("View full schedule") }
     }
 }
 

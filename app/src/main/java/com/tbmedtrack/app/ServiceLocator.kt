@@ -28,7 +28,7 @@ object ServiceLocator {
         medRepo ?: synchronized(this) {
             medRepo ?: run {
                 val db = AppDatabase.get(context)
-                val repo = MedRepository(db.medicineDao(), db.logDao(), db.auditDao(), db.syncOperationDao())
+                val repo = MedRepository(db.medicineDao(), db.logDao(), db.auditDao(), db.syncOperationDao(), db.phaseDao())
                 repo.currentDeviceId = deviceRepository(context).deviceId
                 repo.onEventRecorded = { syncManager(context).queue() }
                 // trackingStartDay is loaded asynchronously by the Application on start; until

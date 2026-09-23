@@ -98,15 +98,18 @@ class AlarmReceiver : BroadcastReceiver() {
         val remindersEnabled = appSettings?.remindersEnabled ?: true
         val date = ScheduleUtil.localDateTime(scheduledMillis).toLocalDate()
 
-        if (med.active && sch.enabled && remindersEnabled &&
-            ScheduleUtil.appliesOn(med, sch, date)
-        ) {
+        // Use generated doses (phase-aware) as the source of truth for whether THIS medicine is
+        // actually scheduled today — so phased meds don't notify on non-scheduled days.
+        val repo = ServiceLocator.medRepository(context)
+        val dosesToday = repo.getDosesForDay(date)
+        val thisScheduled = dosesToday.any { it.medicineId == med.id && it.timeMinutes == sch.timeMinutes }
+
+        if (med.active && sch.enabled && remindersEnabled && thisScheduled) {
             // Only notify if not already taken.
             val existing = db.logDao().findLog(med.id, scheduleId, scheduledMillis)
             if (existing?.status != DoseStatus.TAKEN) {
                 // Count how many medicines are due at this same time today for a grouped message.
-                val repo = ServiceLocator.medRepository(context)
-                val doses = repo.getDosesForDay(date).filter { it.timeMinutes == sch.timeMinutes }
+                val doses = dosesToday.filter { it.timeMinutes == sch.timeMinutes }
                 val count = doses.size
                 val title = "💊 Medication reminder"
                 val body = if (count > 1) {

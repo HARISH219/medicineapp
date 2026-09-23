@@ -40,6 +40,10 @@ data class MedicationLog(
     /** snapshot of medicine name/dose at log time so history stays consistent */
     val medicineName: String = "",
     val doseText: String = "",
+    /** exact tablet count scheduled for this dose on this date (frozen in history) */
+    val tabletsScheduled: Int = 0,
+    /** phase name active on this date, e.g. "Phase 1" (frozen in history) */
+    val phaseName: String = "",
     val notes: String = "",
     /** true if this event was entered as previously-taken history at setup */
     val historical: Boolean = false,

@@ -114,11 +114,25 @@ private fun DoseRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(dose.medicineName, style = MaterialTheme.typography.titleMedium)
+            // Exact tablet count is the primary info for phased meds; dose text for others.
             Text(
-                dose.doseText + (if (dose.foodTiming != "Doesn't matter") " • ${dose.foodTiming}" else ""),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                if (dose.tabletsScheduled > 0)
+                    "${dose.tabletsScheduled} ${if (dose.tabletsScheduled == 1) "TABLET" else "TABLETS"}"
+                else dose.doseText + (if (dose.foodTiming != "Doesn't matter") " • ${dose.foodTiming}" else ""),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
             )
+            if (dose.phaseName.isNotBlank()) {
+                val dayLabel = if (dose.phaseDayCount != null)
+                    " • Day ${dose.treatmentDay} / ${dose.phaseDayCount}"
+                else " • Day ${dose.treatmentDay}"
+                Text(
+                    dose.phaseName + dayLabel,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             StatusLabel(dose, visual.label, visual.color, visual.icon)
         }
     }

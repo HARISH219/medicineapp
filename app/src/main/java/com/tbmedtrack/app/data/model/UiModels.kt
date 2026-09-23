@@ -19,7 +19,15 @@ data class ScheduledDose(
     /** id of existing log row if present */
     val logId: Long?,
     val historical: Boolean = false,
-    val takenTimePrecision: String = com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT
+    val takenTimePrecision: String = com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT,
+    /** exact tablet count scheduled today (from ScheduleEngine); 0 if not tablet-based */
+    val tabletsScheduled: Int = 0,
+    /** phase name active today, e.g. "Phase 1"; blank if the medicine isn't phased */
+    val phaseName: String = "",
+    /** 1-based treatment day for this medicine today; 0 if not phased/started */
+    val treatmentDay: Int = 0,
+    /** total days in the current bounded phase (e.g. 14), null if open-ended/none */
+    val phaseDayCount: Int? = null
 )
 
 /**

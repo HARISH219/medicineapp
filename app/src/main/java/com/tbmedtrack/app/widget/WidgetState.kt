@@ -33,13 +33,25 @@ object WidgetStateProvider {
         val now = System.currentTimeMillis()
 
         if (doses.isEmpty()) {
-            return WidgetState(
-                phase = WidgetPhase.UPCOMING,
-                mascotRes = R.drawable.mascot_sleepy,
-                dotRes = emptyList(),
-                statusText = "No doses today",
-                contentDescription = "MedTrack. No medication doses scheduled today."
-            )
+            // Nothing scheduled today. If a phased medicine has a next dose, show it.
+            val next = firstPhasedNextDose(context, today)
+            return if (next != null) {
+                WidgetState(
+                    phase = WidgetPhase.UPCOMING,
+                    mascotRes = R.drawable.mascot_sleepy,
+                    dotRes = emptyList(),
+                    statusText = "${next.name}: not scheduled · Next ${next.dayLabel} ${next.tablets} tabs",
+                    contentDescription = "MedTrack. ${next.name} not scheduled today. Next dose ${next.dayLabel}, ${next.tablets} tablets."
+                )
+            } else {
+                WidgetState(
+                    phase = WidgetPhase.UPCOMING,
+                    mascotRes = R.drawable.mascot_sleepy,
+                    dotRes = emptyList(),
+                    statusText = "No doses today",
+                    contentDescription = "MedTrack. No medication doses scheduled today."
+                )
+            }
         }
 
         val total = doses.size
@@ -69,15 +81,38 @@ object WidgetStateProvider {
 
         val dots = doses.take(4).map { dotFor(it, now) }
 
+        // Feature the primary tablet-based (phased) medicine's exact count when present.
+        val featured = doses.firstOrNull { it.tabletsScheduled > 0 }
+        val tabletLine = featured?.let {
+            "${it.medicineName}: ${it.tabletsScheduled} ${if (it.tabletsScheduled == 1) "tab" else "tabs"}"
+        }
+
         val statusText = when (phase) {
             WidgetPhase.ALL_COMPLETE -> "All done! ♡"
             WidgetPhase.OVERDUE -> "$taken / $total · check dose"
-            WidgetPhase.DUE -> "Medicine time ♡"
+            WidgetPhase.DUE -> "Due now ♡"
             WidgetPhase.TAKEN -> "$taken / $total taken ♡"
             WidgetPhase.UPCOMING -> nextLabel(doses)
         }
+        // Put the exact tablet count first when available (never a generic total).
+        val finalStatus = if (tabletLine != null) "$tabletLine · $statusText" else statusText
 
-        return WidgetState(phase, mascot, dots, statusText, describe(phase, taken, total, doses))
+        return WidgetState(phase, mascot, dots, finalStatus, describe(phase, taken, total, doses))
+    }
+
+    private data class NextInfo(val name: String, val dayLabel: String, val tablets: Int)
+
+    /** Next scheduled dose for the first phased medicine that isn't scheduled today. */
+    private suspend fun firstPhasedNextDose(context: Context, today: java.time.LocalDate): NextInfo? {
+        val repo = ServiceLocator.medRepository(context)
+        for (mws in repo.getAllMedicinesWithSchedules()) {
+            if (!mws.medicine.active) continue
+            if (repo.phasesFor(mws.medicine.id).isEmpty()) continue
+            val next = repo.nextScheduledDoseFor(mws.medicine.id, today) ?: continue
+            val day = next.date.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }
+            return NextInfo(mws.medicine.name, day, next.tablets)
+        }
+        return null
     }
 
     private fun dotFor(dose: ScheduledDose, now: Long): Int = when {
