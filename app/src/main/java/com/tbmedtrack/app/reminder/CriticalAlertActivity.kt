@@ -35,17 +35,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.lifecycleScope
 import com.tbmedtrack.app.ServiceLocator
 import com.tbmedtrack.app.util.ScheduleUtil
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.launch
 
 /**
- * Full-screen critical alert shown (over the lock screen where the OS allows) when a
- * required dose has not been recorded. The only completion action is MEDICINE TAKEN,
- * which records the event and cancels the escalation chain. Dismissing/leaving does NOT
- * record the medicine as taken.
+ * Full-screen WARNING-ONLY critical alert shown (over the lock screen where the OS allows)
+ * when a required dose has not been recorded. It has NO completion button — recording a dose
+ * happens only on the normal medication screen (spec #94-96). Dismissing/leaving does NOT
+ * record the medicine as taken; the next configured alarm keeps firing until it is recorded.
  *
  * The pulsing red uses a slow (~0.5 Hz) fade that is well below seizure-risk flash rates,
  * and it is disabled entirely when the user enables "reduce motion".
@@ -85,34 +83,45 @@ class CriticalAlertActivity : ComponentActivity() {
                     timeMinutes = timeMinutes,
                     medicineNames = names,
                     reduceMotion = reduceMotion,
-                    onTaken = { markTakenAndFinish(epochDay, timeMinutes, scheduledMillis) }
+                    onOpenApp = { openAppAndFinish() },
+                    onClose = { finish() }
                 )
             }
         }
     }
 
-    private fun markTakenAndFinish(epochDay: Long, timeMinutes: Int, scheduledMillis: Long) {
-        lifecycleScope.launch {
-            val repo = ServiceLocator.medRepository(this@CriticalAlertActivity)
-            repo.markEventTaken(epochDay, timeMinutes)
-            ServiceLocator.criticalAlarmScheduler(this@CriticalAlertActivity)
-                .cancelEventChain(epochDay, timeMinutes, scheduledMillis)
-            NotificationHelper.cancelCritical(this@CriticalAlertActivity)
-            ServiceLocator.syncManager(this@CriticalAlertActivity).queue()
-            finish()
-        }
+    /**
+     * Opens the main app so the user can record the dose on the normal medication interface.
+     * This screen NEVER records the dose itself (see spec #94-96).
+     */
+    private fun openAppAndFinish() {
+        startActivity(
+            android.content.Intent(this, com.tbmedtrack.app.MainActivity::class.java)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        )
+        finish()
     }
 }
 
+/**
+ * WARNING-ONLY alert. It intentionally has NO "Medicine Taken" button (spec #94-96): recording
+ * a dose can only be done from the normal medication interface. This screen just alerts, shows
+ * the NOT RECORDED status, and lets the user open the app or close the alert. Closing does not
+ * record anything — the next configured alarm will fire until the dose is recorded elsewhere.
+ */
 @Composable
 private fun CriticalAlertScreen(
     timeMinutes: Int,
     medicineNames: List<String>,
     reduceMotion: Boolean,
-    onTaken: () -> Unit
+    onOpenApp: () -> Unit,
+    onClose: () -> Unit
 ) {
     val baseRed = Color(0xFFB3120C)
     val brightRed = Color(0xFFE53935)
+    val nowLabel = ScheduleUtil.formatTime(
+        java.time.LocalTime.now(ScheduleUtil.zone()).let { it.hour * 60 + it.minute }
+    )
 
     val pulseAlpha: Float = if (reduceMotion) {
         1f
@@ -144,7 +153,7 @@ private fun CriticalAlertScreen(
         Text("🚨", fontSize = 72.sp)
         Spacer(Modifier.height(16.dp))
         Text(
-            "MEDICINE NOT RECORDED",
+            "MEDICATION ALERT",
             color = Color.White,
             fontWeight = FontWeight.Bold,
             fontSize = 26.sp,
@@ -152,37 +161,44 @@ private fun CriticalAlertScreen(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "${ScheduleUtil.formatTime(timeMinutes)} dose",
+            "Your scheduled medication has not been recorded.",
             color = Color.White,
-            fontSize = 18.sp,
+            fontSize = 16.sp,
             textAlign = TextAlign.Center
         )
-        Spacer(Modifier.height(24.dp))
-        Text(
-            "Today's combination",
-            color = Color.White,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 16.sp
-        )
-        Spacer(Modifier.height(8.dp))
-        medicineNames.forEach { name ->
-            Text("💊 $name", color = Color.White, fontSize = 18.sp, textAlign = TextAlign.Center)
-            Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(20.dp))
+        Text("Scheduled: ${ScheduleUtil.formatTime(timeMinutes)}",
+            color = Color.White, fontSize = 16.sp)
+        Text("Current: $nowLabel", color = Color.White, fontSize = 16.sp)
+        Spacer(Modifier.height(20.dp))
+        if (medicineNames.isNotEmpty()) {
+            Text("Today's combination: ${medicineNames.size} medicines",
+                color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+            Spacer(Modifier.height(8.dp))
+            medicineNames.forEach { name ->
+                Text("• $name", color = Color.White, fontSize = 18.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(2.dp))
+            }
         }
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(20.dp))
+        Text("STATUS", color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp)
+        Text("⚠ NOT RECORDED", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+
+        Spacer(Modifier.height(28.dp))
+        // "Open app" only navigates — it does NOT record the dose.
         Button(
-            onClick = onTaken,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.White,
-                contentColor = brightRed
-            ),
-            modifier = Modifier.fillMaxWidth().height(58.dp)
-        ) {
-            Text("MEDICINE TAKEN", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        }
-        Spacer(Modifier.height(16.dp))
+            onClick = onOpenApp,
+            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = brightRed),
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("OPEN APP TO RECORD", fontWeight = FontWeight.Bold, fontSize = 16.sp) }
+        Spacer(Modifier.height(10.dp))
+        androidx.compose.material3.TextButton(
+            onClick = onClose,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Close", color = Color.White) }
+        Spacer(Modifier.height(12.dp))
         Text(
-            "Only pressing MEDICINE TAKEN records this dose. Closing this screen does not.",
+            "Closing this alert does not record your medicine. Record it from the app's medication screen.",
             color = Color.White.copy(alpha = 0.85f),
             fontSize = 13.sp,
             textAlign = TextAlign.Center

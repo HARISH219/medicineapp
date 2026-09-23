@@ -26,15 +26,26 @@ class CriticalAlarmScheduler(private val context: Context) {
     /** cap escalations so we don't alarm forever into the night. */
     private val maxEscalations = 14
 
-    /** escalation interval in ms; loaded from settings (default 60 min). */
+    /** repeat interval in ms between critical alarms; loaded from settings (default 60 min). */
     @Volatile private var intervalMillis: Long = 60L * 60L * 1000L
+    /** delay in ms after scheduled time before the FIRST critical alarm (default 60 min). */
+    @Volatile private var startDelayMillis: Long = 60L * 60L * 1000L
 
     suspend fun refreshInterval() {
-        val minutes = runCatching {
-            ServiceLocator.settingsRepository(context).settings.first().escalationIntervalMinutes
-        }.getOrDefault(60).coerceAtLeast(5)
-        intervalMillis = minutes * 60L * 1000L
+        val s = runCatching { ServiceLocator.settingsRepository(context).settings.first() }.getOrNull()
+        intervalMillis = ((s?.escalationIntervalMinutes ?: 60).coerceAtLeast(5)) * 60L * 1000L
+        startDelayMillis = ((s?.criticalStartDelayMinutes ?: 60).coerceAtLeast(5)) * 60L * 1000L
     }
+
+    /**
+     * Trigger time for a given escalation index:
+     *  - 0 = the normal reminder, at the scheduled time
+     *  - 1 = first CRITICAL alarm, at scheduledTime + startDelay
+     *  - n>=1 = scheduledTime + startDelay + (n-1) * repeatInterval
+     */
+    private fun triggerFor(scheduledMillis: Long, escalation: Int): Long =
+        if (escalation <= 0) scheduledMillis
+        else scheduledMillis + startDelayMillis + (escalation - 1) * intervalMillis
 
     private fun canScheduleExact(): Boolean =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) alarmManager.canScheduleExactAlarms() else true
@@ -69,8 +80,7 @@ class CriticalAlarmScheduler(private val context: Context) {
     /** Schedule the next escalation step (called after an alarm fires and the dose is still pending). */
     fun scheduleNextEscalation(epochDay: Long, timeMinutes: Int, scheduledMillis: Long, nextEscalation: Int) {
         if (nextEscalation > maxEscalations) return
-        val triggerAt = scheduledMillis + nextEscalation * intervalMillis
-        scheduleAt(epochDay, timeMinutes, scheduledMillis, nextEscalation, triggerAt)
+        scheduleAt(epochDay, timeMinutes, scheduledMillis, nextEscalation, triggerFor(scheduledMillis, nextEscalation))
     }
 
     private fun scheduleAt(
@@ -126,10 +136,15 @@ class CriticalAlarmScheduler(private val context: Context) {
                 // If it's already past, resume escalation from the appropriate hour.
                 val now = System.currentTimeMillis()
                 if (scheduledMillis >= now) {
+                    // Future dose: schedule the normal reminder at its time.
                     scheduleEventChain(date.toEpochDay(), t, scheduledMillis)
                 } else {
-                    val stepsPast = ((now - scheduledMillis) / intervalMillis).toInt() + 1
-                    scheduleNextEscalation(date.toEpochDay(), t, scheduledMillis, stepsPast.coerceAtMost(maxEscalations))
+                    // Past & still pending: find the next escalation whose trigger is in the future.
+                    var next = 1
+                    while (next <= maxEscalations && triggerFor(scheduledMillis, next) < now) next++
+                    if (next <= maxEscalations) {
+                        scheduleNextEscalation(date.toEpochDay(), t, scheduledMillis, next)
+                    }
                 }
             }
         }

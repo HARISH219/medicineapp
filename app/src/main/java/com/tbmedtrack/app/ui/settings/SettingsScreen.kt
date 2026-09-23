@@ -40,6 +40,7 @@ import com.tbmedtrack.app.BuildConfig
 import com.tbmedtrack.app.data.settings.ThemeMode
 import com.tbmedtrack.app.ui.components.SectionCard
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     onOpenDevices: () -> Unit = {},
@@ -142,14 +143,26 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Battery optimization settings") }
                 Spacer(Modifier.height(10.dp))
-                Text("Escalation interval", style = MaterialTheme.typography.bodyLarge)
+                Text("Start critical alarm after", style = MaterialTheme.typography.bodyLarge)
                 Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(30, 60, 90, 120).forEach { m ->
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(15, 30, 45, 60, 120, 180).forEach { m ->
+                        FilterChip(
+                            selected = settings.criticalStartDelayMinutes == m,
+                            onClick = { vm.setCriticalStartDelay(m) },
+                            label = { Text(minutesLabel(m)) }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Repeat critical alarm every", style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(6.dp))
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(30, 45, 60, 120).forEach { m ->
                         FilterChip(
                             selected = settings.escalationIntervalMinutes == m,
                             onClick = { vm.setEscalationInterval(m) },
-                            label = { Text("$m min") }
+                            label = { Text(minutesLabel(m)) }
                         )
                     }
                 }
@@ -288,6 +301,13 @@ fun SettingsScreen(
             dismissButton = { TextButton(onClick = { pendingImportUri = null }) { Text("Cancel") } }
         )
     }
+}
+
+private fun minutesLabel(m: Int): String = when {
+    m < 60 -> "$m min"
+    m == 60 -> "1 hour"
+    m % 60 == 0 -> "${m / 60} hours"
+    else -> "${m / 60}h ${m % 60}m"
 }
 
 @Composable

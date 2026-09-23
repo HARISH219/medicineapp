@@ -147,20 +147,8 @@ object NotificationHelper {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val takenIntent = Intent(context, NotificationActionReceiver::class.java).apply {
-            action = ReminderKeys.ACTION_MARK_EVENT_TAKEN
-            putExtra(ReminderKeys.EXTRA_EPOCH_DAY, epochDay)
-            putExtra(ReminderKeys.EXTRA_TIME_MINUTES, timeMinutes)
-            putExtra(ReminderKeys.EXTRA_SCHEDULED_MILLIS, scheduledMillis)
-            putExtra(ReminderKeys.EXTRA_NOTIFICATION_ID, ReminderKeys.CRITICAL_NOTIFICATION_ID)
-        }
-        val takenPending = PendingIntent.getBroadcast(
-            context, 910000 + timeMinutes, takenIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
         val critical = escalation >= 1
-        val title = if (critical) "🚨 MEDICATION NOT RECORDED" else "💊 Medicine time"
+        val title = if (critical) "🚨 MEDICATION ALERT" else "💊 Medicine time"
         val count = medicineNames.size
         val body = buildString {
             if (critical) {
@@ -187,10 +175,25 @@ object NotificationHelper {
             .setOngoing(true)              // cannot be casually swiped away
             .setAutoCancel(false)          // dismissing never means "taken"
             .setContentIntent(fullScreenPending)
-            .addAction(R.drawable.ic_check, "MEDICINE TAKEN", takenPending)
 
         if (critical) {
+            // Critical alert is WARNING-ONLY: no "Medicine Taken" action. Tapping opens the
+            // full-screen alert; recording happens only on the normal medication screen.
             builder.setFullScreenIntent(fullScreenPending, true)
+        } else {
+            // The first (normal) reminder may offer a quick "Mark as taken" action.
+            val takenIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                action = ReminderKeys.ACTION_MARK_EVENT_TAKEN
+                putExtra(ReminderKeys.EXTRA_EPOCH_DAY, epochDay)
+                putExtra(ReminderKeys.EXTRA_TIME_MINUTES, timeMinutes)
+                putExtra(ReminderKeys.EXTRA_SCHEDULED_MILLIS, scheduledMillis)
+                putExtra(ReminderKeys.EXTRA_NOTIFICATION_ID, ReminderKeys.CRITICAL_NOTIFICATION_ID)
+            }
+            val takenPending = PendingIntent.getBroadcast(
+                context, 910000 + timeMinutes, takenIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(R.drawable.ic_check, "Mark as taken", takenPending)
         }
         if (sound || vibration) {
             var defaults = 0

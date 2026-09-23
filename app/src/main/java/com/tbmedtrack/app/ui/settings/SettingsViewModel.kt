@@ -47,6 +47,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         settings.setEscalationIntervalMinutes(m)
         ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
     }
+    fun setCriticalStartDelay(m: Int) = viewModelScope.launch {
+        settings.setCriticalStartDelayMinutes(m)
+        ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
+    }
 
     fun exportBackup(uri: Uri) = viewModelScope.launch {
         val result = backup.export(uri)

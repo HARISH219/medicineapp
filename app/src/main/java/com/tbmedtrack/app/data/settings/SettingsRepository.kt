@@ -32,8 +32,10 @@ data class AppSettings(
     val regimenSeeded: Boolean = false,
     /** epoch day active reminders begin; unlogged doses before this are never "missed". 0=all tracked */
     val trackingStartDay: Long = 0L,
-    /** escalation interval in minutes for critical reminders (default 60) */
+    /** repeat interval in minutes for critical reminders (default 60) */
     val escalationIntervalMinutes: Int = 60,
+    /** delay in minutes after the scheduled time before the first critical alarm (default 60) */
+    val criticalStartDelayMinutes: Int = 60,
     /** minutes-since-midnight of the primary morning dose (default 10:00) */
     val morningDoseMinutes: Int = 10 * 60,
     /** whether monitor devices receive each kind of alert */
@@ -59,6 +61,7 @@ class SettingsRepository(private val context: Context) {
         val REGIMEN_SEEDED = booleanPreferencesKey("regimen_seeded")
         val TRACKING_START = longPreferencesKey("tracking_start_day")
         val ESCALATION_INTERVAL = intPreferencesKey("escalation_interval")
+        val CRITICAL_START_DELAY = intPreferencesKey("critical_start_delay")
         val MORNING_DOSE = intPreferencesKey("morning_dose_minutes")
         val NOTIFY_NOT_RECORDED = booleanPreferencesKey("notify_not_recorded")
         val NOTIFY_TAKEN = booleanPreferencesKey("notify_taken")
@@ -81,6 +84,7 @@ class SettingsRepository(private val context: Context) {
             regimenSeeded = p[Keys.REGIMEN_SEEDED] ?: false,
             trackingStartDay = p[Keys.TRACKING_START] ?: 0L,
             escalationIntervalMinutes = p[Keys.ESCALATION_INTERVAL] ?: 60,
+            criticalStartDelayMinutes = p[Keys.CRITICAL_START_DELAY] ?: 60,
             morningDoseMinutes = p[Keys.MORNING_DOSE] ?: (10 * 60),
             notifyMonitorNotRecorded = p[Keys.NOTIFY_NOT_RECORDED] ?: true,
             notifyMonitorTaken = p[Keys.NOTIFY_TAKEN] ?: true,
@@ -101,6 +105,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun setRegimenSeeded(seeded: Boolean) = context.dataStore.edit { it[Keys.REGIMEN_SEEDED] = seeded }
     suspend fun setTrackingStartDay(day: Long) = context.dataStore.edit { it[Keys.TRACKING_START] = day }
     suspend fun setEscalationIntervalMinutes(m: Int) = context.dataStore.edit { it[Keys.ESCALATION_INTERVAL] = m }
+    suspend fun setCriticalStartDelayMinutes(m: Int) = context.dataStore.edit { it[Keys.CRITICAL_START_DELAY] = m }
     suspend fun setMorningDoseMinutes(m: Int) = context.dataStore.edit { it[Keys.MORNING_DOSE] = m }
     suspend fun setNotifyNotRecorded(v: Boolean) = context.dataStore.edit { it[Keys.NOTIFY_NOT_RECORDED] = v }
     suspend fun setNotifyTaken(v: Boolean) = context.dataStore.edit { it[Keys.NOTIFY_TAKEN] = v }
