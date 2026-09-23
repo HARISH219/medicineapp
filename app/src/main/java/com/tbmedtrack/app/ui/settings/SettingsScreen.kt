@@ -274,6 +274,27 @@ fun SettingsScreen(
                 )
             }
         }
+
+        item {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp),
+                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "❤️ Made With Love By Harish",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "Version 1.0.0",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
+        }
     }
 
     if (showDelete) {

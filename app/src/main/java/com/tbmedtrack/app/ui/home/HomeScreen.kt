@@ -2,10 +2,13 @@ package com.tbmedtrack.app.ui.home
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,37 +18,43 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.MedicalServices
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.EventBusy
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tbmedtrack.app.data.model.DoseEvent
-import kotlinx.coroutines.launch
 import com.tbmedtrack.app.ui.components.EmptyState
+import com.tbmedtrack.app.ui.components.MoonDecor
+import com.tbmedtrack.app.ui.components.PillDecor
+import com.tbmedtrack.app.ui.components.ProgressRing
 import com.tbmedtrack.app.ui.components.SectionCard
-import com.tbmedtrack.app.ui.theme.StatusUpcomingContainer
+import com.tbmedtrack.app.ui.components.SparkleDecor
+import com.tbmedtrack.app.ui.components.SunDecor
+import com.tbmedtrack.app.ui.theme.AccentPurple
+import com.tbmedtrack.app.ui.theme.DarkOnSurfaceMuted
+import com.tbmedtrack.app.ui.theme.DueOrange
+import com.tbmedtrack.app.ui.theme.DueOrangeSoft
+import com.tbmedtrack.app.ui.theme.StatusMissed
+import com.tbmedtrack.app.ui.theme.StatusTaken
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -53,133 +62,86 @@ fun HomeScreen(
     onOpenCalendar: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenTreatment: () -> Unit,
+    onOpenEvent: (DoseEvent) -> Unit = {},
     vm: HomeViewModel = viewModel()
 ) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.refresh() }
 
-    // Event pending a revert confirmation (long-press on a TAKEN card).
+    val snackbarHostState = androidx.compose.runtime.remember { androidx.compose.material3.SnackbarHostState() }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     var revertTarget by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<DoseEvent?>(null)
     }
-    val snackbarHostState = androidx.compose.runtime.remember { androidx.compose.material3.SnackbarHostState() }
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth()) {
+    Box(Modifier.fillMaxWidth()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+            contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp)
+        ) {
+            item { GreetingHeader(state) }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 12.dp, bottom = 96.dp)
-    ) {
-        item {
-            Column {
-                Text(state.greeting, style = MaterialTheme.typography.headlineMedium)
-                Text(
-                    "Your TB medication schedule",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    state.dateLabel,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
+            state.nextDose?.let { next ->
+                item {
+                    NextDoseHero(
+                        state = state,
+                        event = next,
+                        onMarkTaken = {
+                            vm.markEventTaken(next)
+                            showUndo(scope, snackbarHostState) { vm.revertEvent(next) }
+                        }
+                    )
+                }
             }
-        }
 
-        if (state.actionRequired && state.pendingEvent != null) {
-            item {
-                ActionRequiredCard(
-                    combination = state.pendingEvent!!,
-                    onTaken = {
-                        val ev = state.pendingEvent!!
-                        vm.markEventTaken(ev)
-                        showUndo(scope, snackbarHostState) { vm.revertEvent(ev) }
-                    }
-                )
+            if (state.eventsTotal > 0) {
+                item { TodayProgressCard(state) }
             }
-        }
 
-        item { ProgressCard(state) }
-
-        if (state.todayComplete && state.eventsTotal > 0) {
-            item { TodayCompleteCard(state.eventsCompleted, state.eventsTotal) }
-        }
-
-        // Split dashboard: Morning TB combination + Night medicine.
-        state.morningCombination?.let { morning ->
-            item {
-                DashboardEventCard(
-                    title = "☀️ Morning TB medicines",
-                    event = morning,
-                    onTaken = { vm.markEventTaken(morning); showUndo(scope, snackbarHostState) { vm.revertEvent(morning) } },
-                    onRequestRevert = { revertTarget = morning }
-                )
+            if (state.events.isNotEmpty()) {
+                item {
+                    Text(
+                        "Today's schedule",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                items(state.events, key = { it.timeMinutes }) { event ->
+                    ScheduleEventCard(
+                        event = event,
+                        onClick = { onOpenEvent(event) },
+                        onRequestRevert = { revertTarget = event }
+                    )
+                }
             }
-        }
-        state.nightEvent?.let { night ->
-            item {
-                DashboardEventCard(
-                    title = "🌙 Night medicine",
-                    event = night,
-                    onTaken = { vm.markEventTaken(night); showUndo(scope, snackbarHostState) { vm.revertEvent(night) } },
-                    onRequestRevert = { revertTarget = night }
-                )
+
+            items(state.notScheduledToday, key = { it.medicineName }) { info ->
+                NotScheduledCard(info)
             }
-        }
 
-        items(state.notScheduledToday, key = { it.medicineName }) { info ->
-            NotScheduledCard(info)
-        }
-
-        if (state.combinationCount > 0) {
-            item { CombinationCard(state.combinationCount, state.morningCombination) }
-        }
-
-        state.nextDose?.let { next ->
-            item { NextDoseCard(state, next, onView = onOpenTreatment) }
-        }
-
-        item { QuickActions(onAddMedicine, onOpenCalendar, onOpenHistory, onOpenTreatment) }
-
-        item {
-            Text(
-                "Full schedule",
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-
-        if (state.events.isEmpty() && !state.loading) {
-            item {
-                EmptyState(
-                    icon = Icons.Outlined.EventBusy,
-                    title = if (state.hasMedicines) "No doses scheduled today"
-                    else "No medicines added yet",
-                    subtitle = if (state.hasMedicines) "Enjoy your day — nothing is due today."
-                    else "Add your first medicine to start tracking your TB treatment.",
-                    actionLabel = if (state.hasMedicines) null else "Add medicine",
-                    onAction = if (state.hasMedicines) null else onAddMedicine
-                )
+            if (state.events.isEmpty() && !state.loading) {
+                item {
+                    EmptyState(
+                        icon = Icons.Outlined.EventBusy,
+                        title = if (state.hasMedicines) "Nothing due today"
+                        else "No medicines added yet",
+                        subtitle = if (state.hasMedicines) "Enjoy your day — take care of yourself."
+                        else "Add your first medicine to start tracking your treatment.",
+                        actionLabel = if (state.hasMedicines) null else "Add medicine",
+                        onAction = if (state.hasMedicines) null else onAddMedicine
+                    )
+                }
             }
-        } else {
-            items(state.events, key = { it.timeMinutes }) { event ->
-                DoseEventCard(
-                    event = event,
-                    onMarkAllTaken = { vm.markEventTaken(event); showUndo(scope, snackbarHostState) { vm.revertEvent(event) } },
-                    onMarkDoseTaken = { vm.markDoseTaken(it) }
-                )
-            }
+
+            item { MotivationalCard(state.todayComplete) }
         }
-    }
 
         androidx.compose.material3.SnackbarHost(
             hostState = snackbarHostState,
-            modifier = Modifier.align(androidx.compose.ui.Alignment.BottomCenter)
+            modifier = Modifier.align(Alignment.BottomCenter)
         )
-    } // Box
+    }
 
     revertTarget?.let { target ->
         androidx.compose.material3.AlertDialog(
@@ -187,8 +149,7 @@ fun HomeScreen(
             title = { Text("Correct medication status?") },
             text = {
                 Text(
-                    "You currently marked this medicine as TAKEN. Do you want to change it back " +
-                        "to NOT RECORDED?"
+                    "You currently marked this as TAKEN. Change it back to NOT RECORDED?"
                 )
             },
             confirmButton = {
@@ -203,7 +164,6 @@ fun HomeScreen(
     }
 }
 
-/** Show a transient Undo snackbar; performing Undo reverts the just-recorded event. */
 private fun showUndo(
     scope: kotlinx.coroutines.CoroutineScope,
     host: androidx.compose.material3.SnackbarHostState,
@@ -219,271 +179,330 @@ private fun showUndo(
     }
 }
 
+/** "Good morning ☀️" + care line + date. */
 @Composable
-private fun ActionRequiredCard(combination: DoseEvent, onTaken: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = com.tbmedtrack.app.ui.theme.StatusMissedContainer
-        )
+private fun GreetingHeader(state: HomeUiState) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(Modifier.padding(18.dp)) {
+        Column(Modifier.weight(1f)) {
             Text(
-                "🚨 ACTION REQUIRED",
-                style = MaterialTheme.typography.labelLarge,
-                color = com.tbmedtrack.app.ui.theme.StatusMissed,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "${com.tbmedtrack.app.util.ScheduleUtil.formatTime(combination.timeMinutes)} medication has not been recorded.",
-                style = MaterialTheme.typography.titleMedium
+                state.greeting,
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "Today's combination: ${combination.totalCount} medicines",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = onTaken,
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = com.tbmedtrack.app.ui.theme.StatusMissed
-                )
-            ) { Text("MEDICINE TAKEN", fontWeight = FontWeight.Bold) }
-        }
-    }
-}
-
-@Composable
-private fun NotScheduledCard(info: com.tbmedtrack.app.ui.home.NotScheduledInfo) {
-    SectionCard {
-        Text("💊 ${info.medicineName}", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
-        Text("NOT SCHEDULED TODAY",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(8.dp))
-        Text("Next dose", style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("${info.nextDateLabel} • ${info.nextTablets} ${if (info.nextTablets == 1) "tablet" else "tablets"}",
-            style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
-private fun CombinationCard(count: Int, combination: DoseEvent?) {
-    SectionCard {
-        Text(
-            "TODAY'S COMBINATION",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "$count ${if (count == 1) "MEDICINE" else "MEDICINES"}",
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.primary
-        )
-        combination?.let { c ->
-            Spacer(Modifier.height(8.dp))
-            c.doses.forEach { d ->
-                Text("💊 ${d.medicineName}  ${d.doseText}", style = MaterialTheme.typography.bodyLarge)
-                Spacer(Modifier.height(2.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProgressCard(state: HomeUiState) {
-    val progress by animateFloatAsState(
-        targetValue = state.progressFraction,
-        animationSpec = tween(700),
-        label = "progress"
-    )
-    SectionCard {
-        Text(
-            "TODAY'S PROGRESS",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "${state.eventsCompleted} / ${state.eventsTotal} medication events completed",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Spacer(Modifier.height(12.dp))
-        LinearProgressIndicator(
-            progress = { progress },
-            modifier = Modifier.fillMaxWidth().height(12.dp),
-            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            state.remainingText,
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (state.todayComplete)
-                MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurface
-        )
-    }
-}
-
-@Composable
-private fun TodayCompleteCard(completed: Int, total: Int) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = com.tbmedtrack.app.ui.theme.StatusTakenContainer
-        )
-    ) {
-        Column(Modifier.padding(18.dp)) {
-            Text("✓ TODAY'S MEDICATION COMPLETE",
-                style = MaterialTheme.typography.titleMedium,
-                color = com.tbmedtrack.app.ui.theme.StatusTaken,
-                fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text("$completed / $total medication events completed",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-@Composable
-private fun DashboardEventCard(
-    title: String,
-    event: DoseEvent,
-    onTaken: () -> Unit,
-    onRequestRevert: () -> Unit = {}
-) {
-    val now = System.currentTimeMillis()
-    val allTaken = event.allTaken
-    val takenAt = event.doses.mapNotNull { it.takenAtMillis }.maxOrNull()
-    val historical = event.doses.any { it.historical }
-    // Long-press a completed card to correct an accidental "taken".
-    val cardModifier = if (allTaken) {
-        Modifier.combinedClickable(onClick = {}, onLongClick = onRequestRevert)
-    } else Modifier
-    androidx.compose.material3.Card(
-        modifier = Modifier.fillMaxWidth().then(cardModifier),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-      androidx.compose.foundation.layout.Column(Modifier.padding(18.dp)) {
-        Text(title, style = MaterialTheme.typography.titleMedium)
-        Text(
-            com.tbmedtrack.app.util.ScheduleUtil.formatTime(event.timeMinutes) +
-                if (event.totalCount > 1) " • ${event.totalCount} medicines" else "",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(8.dp))
-        when {
-            allTaken && historical -> Text("✓ Recorded (previous history)",
-                color = com.tbmedtrack.app.ui.theme.StatusTaken, fontWeight = FontWeight.SemiBold)
-            allTaken -> {
-                val t = takenAt?.let { formatClockShort(it) }
-                Text(if (t != null) "✓ Taken at $t" else "✓ Taken",
-                    color = com.tbmedtrack.app.ui.theme.StatusTaken, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(4.dp))
-                Text("Long-press to correct if this was a mistake.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            now < event.scheduledMillis -> Text("○ Upcoming",
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else -> {
-                Text("🚨 Not recorded", color = com.tbmedtrack.app.ui.theme.StatusMissed,
-                    fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = onTaken, modifier = Modifier.fillMaxWidth()) {
-                    Text("MEDICINE TAKEN", fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-      }
-    }
-}
-
-private fun formatClockShort(millis: Long): String {
-    val fmt = java.time.format.DateTimeFormatter.ofPattern("hh:mm a")
-    return java.time.Instant.ofEpochMilli(millis)
-        .atZone(java.time.ZoneId.systemDefault()).toLocalTime().format(fmt)
-}
-
-@Composable
-private fun NextDoseCard(state: HomeUiState, next: DoseEvent, onView: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (state.nextDoseDue) StatusUpcomingContainer
-            else MaterialTheme.colorScheme.primaryContainer
-        )
-    ) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                if (state.nextDoseDue) "🔔 MEDICATION DUE" else "NEXT DOSE",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "💊 ${next.totalCount} ${if (next.totalCount == 1) "medicine" else "medicines"}",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                "Take care of yourself today.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = DarkOnSurfaceMuted
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                com.tbmedtrack.app.util.ScheduleUtil.formatTime(next.timeMinutes) +
-                    " • " + state.nextDoseCountdown,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer
+                state.dateLabel,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AccentPurple
             )
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(onClick = onView) { Text("View details") }
+        }
+        val isNight = state.greeting.contains("evening") || state.greeting.contains("🌙")
+        Box(
+            Modifier
+                .size(46.dp)
+                .background(Color(0x22FFFFFF), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isNight) MoonDecor(Modifier.size(30.dp)) else SunDecor(Modifier.size(34.dp))
+        }
+    }
+}
+
+/** Big orange NEXT DOSE hero: time, label, medicines•tablets, pill decor, Mark as taken. */
+@Composable
+private fun NextDoseHero(state: HomeUiState, event: DoseEvent, onMarkTaken: () -> Unit) {
+    val timeLabel = com.tbmedtrack.app.util.ScheduleUtil.formatTime(event.timeMinutes)
+    val partOfDay = when {
+        event.timeMinutes < 12 * 60 -> "Morning medicines"
+        event.timeMinutes < 17 * 60 -> "Afternoon medicines"
+        else -> "Night medicines"
+    }
+    val meds = event.medicinesCount
+    val tabs = event.tabletsCount
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.linearGradient(listOf(DueOrange, DueOrangeSoft)),
+                RoundedCornerShape(28.dp)
+            )
+    ) {
+        // Decorative pills + sparkle in the corner
+        PillDecor(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 18.dp, end = 22.dp)
+                .size(width = 34.dp, height = 20.dp)
+        )
+        SparkleDecor(
+            Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 46.dp, end = 16.dp)
+                .size(16.dp),
+            color = Color(0xCCFFFFFF)
+        )
+        Column(Modifier.padding(22.dp)) {
+            Box(
+                Modifier
+                    .background(Color(0x33000000), RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    if (state.nextDoseDue) "DUE NOW" else "NEXT DOSE",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(
+                timeLabel,
+                style = MaterialTheme.typography.headlineLarge,
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                partOfDay,
+                style = MaterialTheme.typography.titleMedium,
+                color = Color(0xEEFFFFFF)
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "$meds ${if (meds == 1) "medicine" else "medicines"} • $tabs ${if (tabs == 1) "tablet" else "tablets"}",
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color(0xEEFFFFFF),
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Stay on track 💛",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xCCFFFFFF)
+            )
+            Spacer(Modifier.height(16.dp))
+            if (event.allTaken) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.CheckCircle, null, tint = Color.White)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Taken — nice work!", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Button(
+                    onClick = onMarkTaken,
+                    modifier = Modifier.fillMaxWidth().height(54.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White,
+                        contentColor = DueOrange
+                    )
+                ) {
+                    Icon(Icons.Filled.CheckCircle, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Mark as taken", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
+    }
+}
+
+/** Today's progress: "X/Y doses taken", dual event markers, circular % ring. */
+@Composable
+private fun TodayProgressCard(state: HomeUiState) {
+    val fraction by animateFloatAsState(
+        targetValue = if (state.eventsTotal == 0) 0f
+        else state.eventsCompleted.toFloat() / state.eventsTotal,
+        animationSpec = tween(700),
+        label = "ring"
+    )
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Today's progress",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "${state.eventsCompleted}/${state.eventsTotal} doses taken",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DarkOnSurfaceMuted
+                )
+                Spacer(Modifier.height(14.dp))
+                // Dual event markers (morning / night, etc.)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    state.events.forEach { ev ->
+                        EventMarkerRow(ev)
+                    }
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Box(Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+                ProgressRing(fraction = fraction, modifier = Modifier.size(96.dp))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "${(fraction * 100).toInt()}%",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        "Complete",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = DarkOnSurfaceMuted
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun QuickActions(
-    onAdd: () -> Unit,
-    onCalendar: () -> Unit,
-    onHistory: () -> Unit,
-    onTreatment: () -> Unit
+private fun EventMarkerRow(ev: DoseEvent) {
+    val icon: @Composable () -> Unit = {
+        if (ev.timeMinutes >= 17 * 60) MoonDecor(Modifier.size(18.dp))
+        else SunDecor(Modifier.size(18.dp))
+    }
+    val label = when {
+        ev.timeMinutes < 12 * 60 -> "Morning"
+        ev.timeMinutes < 17 * 60 -> "Afternoon"
+        else -> "Night"
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { icon() }
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.width(8.dp))
+        val (dotColor, statusText) = when {
+            ev.allTaken -> StatusTaken to "Taken"
+            System.currentTimeMillis() > ev.scheduledMillis + 60 * 60_000L -> StatusMissed to "Overdue"
+            else -> DueOrange to "Due"
+        }
+        Box(
+            Modifier
+                .background(dotColor.copy(alpha = 0.18f), RoundedCornerShape(50))
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+        ) {
+            Text(statusText, style = MaterialTheme.typography.labelLarge, color = dotColor)
+        }
+    }
+}
+
+/** A schedule event card: icon, time, medicines•tablets, status pill. Tap to open detail. */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ScheduleEventCard(
+    event: DoseEvent,
+    onClick: () -> Unit,
+    onRequestRevert: () -> Unit
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        QuickAction("Add", Icons.Filled.Add, Modifier.weight(1f), onAdd)
-        QuickAction("History", Icons.Filled.History, Modifier.weight(1f), onHistory)
-        QuickAction("Calendar", Icons.Filled.CalendarMonth, Modifier.weight(1f), onCalendar)
-        QuickAction("Treatment", Icons.Filled.MedicalServices, Modifier.weight(1f), onTreatment)
+    val now = System.currentTimeMillis()
+    val (accent, statusText) = when {
+        event.allTaken -> StatusTaken to "Taken"
+        now > event.scheduledMillis + 60 * 60_000L -> StatusMissed to "Overdue"
+        now >= event.scheduledMillis -> DueOrange to "Due"
+        else -> AccentPurple to "Upcoming"
+    }
+    val clickMod = if (event.allTaken) {
+        Modifier.combinedClickable(onClick = onClick, onLongClick = onRequestRevert)
+    } else Modifier.combinedClickable(onClick = onClick, onLongClick = {})
+    SectionCard(modifier = clickMod, contentPadding = 16.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .background(accent.copy(alpha = 0.16f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                if (event.timeMinutes >= 17 * 60) MoonDecor(Modifier.size(24.dp))
+                else SunDecor(Modifier.size(26.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    com.tbmedtrack.app.util.ScheduleUtil.formatTime(event.timeMinutes),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${event.medicinesCount} ${if (event.medicinesCount == 1) "medicine" else "medicines"} • " +
+                        "${event.tabletsCount} ${if (event.tabletsCount == 1) "tablet" else "tablets"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DarkOnSurfaceMuted
+                )
+            }
+            Box(
+                Modifier
+                    .background(accent.copy(alpha = 0.18f), RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Text(statusText, style = MaterialTheme.typography.labelLarge, color = accent, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }
 
 @Composable
-private fun QuickAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, modifier: Modifier, onClick: () -> Unit) {
-    Card(
-        modifier = modifier.clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+private fun NotScheduledCard(info: NotScheduledInfo) {
+    SectionCard(contentPadding = 16.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                PillDecor(Modifier.size(width = 30.dp, height = 18.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(info.medicineName, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "Next: ${info.nextDateLabel} • ${info.nextTablets} ${if (info.nextTablets == 1) "tablet" else "tablets"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DarkOnSurfaceMuted
+                )
+            }
+            Text("Not today", style = MaterialTheme.typography.labelLarge, color = DarkOnSurfaceMuted)
+        }
+    }
+}
+
+/** Motivational footer card. */
+@Composable
+private fun MotivationalCard(complete: Boolean) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.linearGradient(listOf(AccentPurple.copy(alpha = 0.30f), Color(0x224F46E5))),
+                RoundedCornerShape(24.dp)
+            )
+            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(24.dp))
     ) {
-        Column(
-            Modifier.fillMaxWidth().padding(vertical = 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
-            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+        SparkleDecor(
+            Modifier.align(Alignment.TopEnd).padding(14.dp).size(18.dp),
+            color = Color(0xCCA5B4FC)
+        )
+        Column(Modifier.padding(20.dp)) {
+            Text(
+                if (complete) "You did it today! 🌟" else "Small steps make a big difference",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (complete) "Every dose taken is a win. Rest easy." else "You got this! 💪",
+                style = MaterialTheme.typography.bodyMedium,
+                color = DarkOnSurfaceMuted
+            )
         }
     }
 }

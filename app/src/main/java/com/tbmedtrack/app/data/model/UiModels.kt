@@ -62,6 +62,19 @@ data class DoseEvent(
     val anyMissed: Boolean get() = doses.any { it.status == DoseStatus.MISSED }
     val takenCount: Int get() = doses.count { it.status == DoseStatus.TAKEN }
     val totalCount: Int get() = doses.size
+
+    /**
+     * Number of distinct MEDICINES in this event.
+     * NOTE: medicines != tablets. Each medicine may need multiple tablets.
+     */
+    val medicinesCount: Int get() = doses.map { it.medicineId }.distinct().size
+
+    /**
+     * Total number of TABLETS to swallow for this event, summed from each medicine's
+     * actual scheduled tablet count (falls back to 1 tablet per medicine when a
+     * medicine has no explicit tablet count). Never assume medicines == tablets.
+     */
+    val tabletsCount: Int get() = doses.sumOf { if (it.tabletsScheduled > 0) it.tabletsScheduled else 1 }
 }
 
 enum class DayAdherence { NONE, ALL_TAKEN, PARTIAL, MISSED }

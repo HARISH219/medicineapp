@@ -1,9 +1,9 @@
 package com.tbmedtrack.app.ui.components
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,20 +21,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.tbmedtrack.app.ui.theme.DarkGlassBorder
 
-/** A soft, rounded elevated card used throughout the app. */
+/** A dark "glass" card: elevated navy surface with a subtle translucent border. */
 @Composable
 fun SectionCard(
     modifier: Modifier = Modifier,
+    contentPadding: androidx.compose.ui.unit.Dp = 18.dp,
     content: @Composable () -> Unit
 ) {
     Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.dp, DarkGlassBorder, RoundedCornerShape(24.dp)),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        Column(Modifier.padding(18.dp)) { content() }
+        Column(Modifier.padding(contentPadding)) { content() }
     }
 }
 
