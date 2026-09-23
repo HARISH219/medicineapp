@@ -38,6 +38,8 @@ class TbMedApplication : Application() {
                 // Pick RemoteSyncClient if a backend URL is configured, then drain pending sync.
                 ServiceLocator.syncManager(this@TbMedApplication).reconfigure()
                 ServiceLocator.syncManager(this@TbMedApplication).syncNow()
+                // Refresh any placed home-screen widgets with current status.
+                com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(this@TbMedApplication)
             }
         }
 

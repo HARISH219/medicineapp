@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp"
+    android:height="72dp"
+    android:viewportWidth="72"
+    android:viewportHeight="72">
+    <path android:fillColor="#E08A00" android:pathData="M26,60 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#E08A00" android:pathData="M46,60 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#FFC24D"
+        android:pathData="M36,10 C48,10 56,18 56,30 L56,44 C56,56 48,62 36,62 C24,62 16,56 16,44 L16,30 C16,18 24,10 36,10 Z" />
+    <path android:fillColor="#FFD98A"
+        android:pathData="M36,30 C46,30 50,36 50,44 C50,54 44,58 36,58 C28,58 22,54 22,44 C22,36 26,30 36,30 Z" />
+    <path android:fillColor="#FFC24D" android:pathData="M16,36 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#FFC24D" android:pathData="M56,36 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <!-- worried eyes (big) -->
+    <path android:fillColor="#5A3B00" android:pathData="M29,33 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+    <path android:fillColor="#5A3B00" android:pathData="M43,33 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M30.5,31.5 m-1.1,0 a1.1,1.1 0 1,0 2.2,0 a1.1,1.1 0 1,0 -2.2,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M44.5,31.5 m-1.1,0 a1.1,1.1 0 1,0 2.2,0 a1.1,1.1 0 1,0 -2.2,0" />
+    <path android:fillColor="#FF8FA8" android:pathData="M23,40 m-3,0 a3,2 0 1,0 6,0 a3,2 0 1,0 -6,0" />
+    <path android:fillColor="#FF8FA8" android:pathData="M49,40 m-3,0 a3,2 0 1,0 6,0 a3,2 0 1,0 -6,0" />
+    <!-- small worried mouth -->
+    <path android:strokeColor="#5A3B00" android:strokeWidth="2.2" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M33,45 Q36,43 39,45" />
+    <!-- heart accent -->
+    <path android:fillColor="#FF6E8A" android:pathData="M58,16 c-1.2,-1.2 -3.2,-1.2 -3.2,0.8 c0,-2 -2,-2 -3.2,-0.8 c-1.2,1.2 0,3.2 3.2,5.2 c3.2,-2 4.4,-4 3.2,-5.2 z" />
+</vector>

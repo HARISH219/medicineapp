@@ -90,9 +90,14 @@ class SyncManager(private val context: Context) {
             }
 
             // Pull remote changes and merge (TAKEN/REVERTED authoritative).
+            var changed = false
             runCatching {
                 val remote = client.downloadEvents(0L).getOrThrow()
-                for (r in remote) mergeRemote(r)
+                for (r in remote) if (mergeRemote(r)) changed = true
+            }
+            // Refresh widgets so a monitor device reflects the newly-synced status.
+            if (changed) {
+                com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(context)
             }
         }
     }
@@ -110,12 +115,12 @@ class SyncManager(private val context: Context) {
      * Merge a remote event with the local copy using append-oriented, TAKEN-authoritative
      * rules: never downgrade a locally-recorded "taken" event.
      */
-    private suspend fun mergeRemote(remote: com.tbmedtrack.app.data.db.MedicationLog) {
+    private suspend fun mergeRemote(remote: com.tbmedtrack.app.data.db.MedicationLog): Boolean {
         val db = AppDatabase.get(context)
         val local = db.logDao().getByUuid(remote.uuid)
         if (local == null) {
             db.logDao().insert(remote.copy(id = 0, syncState = SyncState.SYNCED))
-            return
+            return true
         }
         // Newer updatedAt wins (a revert has a newer timestamp than the original take, so a
         // stale remote TAKEN can never overwrite a fresh local revert). On an exact tie, a
@@ -128,6 +133,8 @@ class SyncManager(private val context: Context) {
         }
         if (keepRemote) {
             db.logDao().update(remote.copy(id = local.id, syncState = SyncState.SYNCED))
+            return true
         }
+        return false
     }
 }

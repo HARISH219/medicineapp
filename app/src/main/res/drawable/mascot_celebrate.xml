@@ -1,0 +1,31 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp"
+    android:height="72dp"
+    android:viewportWidth="72"
+    android:viewportHeight="72">
+    <!-- confetti -->
+    <path android:fillColor="#FF6E8A" android:pathData="M10,14 h4 v4 h-4 z" />
+    <path android:fillColor="#4DD6A6" android:pathData="M60,10 h4 v4 h-4 z" />
+    <path android:fillColor="#FFD84D" android:pathData="M64,30 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
+    <path android:fillColor="#6FB6E6" android:pathData="M8,32 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
+    <path android:fillColor="#F59E0B" android:pathData="M26,60 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#F59E0B" android:pathData="M46,60 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#5AD1A0"
+        android:pathData="M36,10 C48,10 56,18 56,30 L56,44 C56,56 48,62 36,62 C24,62 16,56 16,44 L16,30 C16,18 24,10 36,10 Z" />
+    <path android:fillColor="#8BE3C1"
+        android:pathData="M36,30 C46,30 50,36 50,44 C50,54 44,58 36,58 C28,58 22,54 22,44 C22,36 26,30 36,30 Z" />
+    <!-- arms up -->
+    <path android:fillColor="#5AD1A0" android:pathData="M15,30 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#5AD1A0" android:pathData="M57,30 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <!-- happy eyes (arcs) -->
+    <path android:strokeColor="#1F5C46" android:strokeWidth="2.6" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M26,34 Q29,30 32,34" />
+    <path android:strokeColor="#1F5C46" android:strokeWidth="2.6" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M40,34 Q43,30 46,34" />
+    <path android:fillColor="#FF9EB5" android:pathData="M24,40 m-3,0 a3,2 0 1,0 6,0 a3,2 0 1,0 -6,0" />
+    <path android:fillColor="#FF9EB5" android:pathData="M48,40 m-3,0 a3,2 0 1,0 6,0 a3,2 0 1,0 -6,0" />
+    <!-- big open smile -->
+    <path android:fillColor="#1F5C46" android:pathData="M31,42 Q36,50 41,42 Q36,46 31,42 z" />
+    <!-- star -->
+    <path android:fillColor="#FFD84D" android:pathData="M14,44 l1.6,3.4 3.4,1.6 -3.4,1.6 -1.6,3.4 -1.6,-3.4 -3.4,-1.6 3.4,-1.6 z" />
+</vector>

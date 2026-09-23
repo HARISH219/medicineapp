@@ -144,6 +144,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             ServiceLocator.criticalAlarmScheduler(getApplication())
                 .cancelEventChain(event.epochDay, event.timeMinutes, event.scheduledMillis)
             ServiceLocator.syncManager(getApplication()).queue()
+            com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
             refresh()
         }
     }
@@ -153,6 +154,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             repo.markTaken(dose)
             com.tbmedtrack.app.reminder.NotificationHelper.cancel(getApplication(), dose.scheduledMillis)
             ServiceLocator.syncManager(getApplication()).queue()
+            com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
             refresh()
         }
     }
@@ -169,6 +171,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
                 ServiceLocator.syncManager(getApplication()).queue()
             }
+            com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
             refresh()
         }
     }

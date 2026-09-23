@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="72dp"
+    android:height="72dp"
+    android:viewportWidth="72"
+    android:viewportHeight="72">
+    <!-- tiny feet -->
+    <path android:fillColor="#F59E0B" android:pathData="M26,60 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#F59E0B" android:pathData="M46,60 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <!-- rounded capsule body -->
+    <path android:fillColor="#7C6BF0"
+        android:pathData="M36,10 L36,10 C48,10 56,18 56,30 L56,44 C56,56 48,62 36,62 C24,62 16,56 16,44 L16,30 C16,18 24,10 36,10 Z" />
+    <!-- lighter belly -->
+    <path android:fillColor="#A79BF6"
+        android:pathData="M36,30 C46,30 50,36 50,44 C50,54 44,58 36,58 C28,58 22,54 22,44 C22,36 26,30 36,30 Z" />
+    <!-- arms -->
+    <path android:fillColor="#7C6BF0" android:pathData="M16,38 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path android:fillColor="#7C6BF0" android:pathData="M56,38 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <!-- eyes (happy) -->
+    <path android:fillColor="#2B2350" android:pathData="M29,32 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <path android:fillColor="#2B2350" android:pathData="M43,32 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+    <!-- eye shine -->
+    <path android:fillColor="#FFFFFF" android:pathData="M30,31 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M44,31 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0" />
+    <!-- blush -->
+    <path android:fillColor="#FF9EB5" android:pathData="M24,38 m-3,0 a3,2 0 1,0 6,0 a3,2 0 1,0 -6,0" />
+    <path android:fillColor="#FF9EB5" android:pathData="M48,38 m-3,0 a3,2 0 1,0 6,0 a3,2 0 1,0 -6,0" />
+    <!-- smile -->
+    <path android:strokeColor="#2B2350" android:strokeWidth="2.4" android:strokeLineCap="round"
+        android:fillColor="#00000000" android:pathData="M32,42 Q36,47 40,42" />
+    <!-- sparkle -->
+    <path android:fillColor="#FFD84D" android:pathData="M58,16 l1.6,3.4 3.4,1.6 -3.4,1.6 -1.6,3.4 -1.6,-3.4 -3.4,-1.6 3.4,-1.6 z" />
+</vector>
