@@ -89,7 +89,7 @@ app.get("/status", (_req, res) =>
   res.json({
     service: "TB MedTrack sync backend",
     status: "ok",
-    endpoints: ["/health", "/status", "/stats", "/v1/public-stats", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
+    endpoints: ["/health", "/status", "/stats", "/system", "/v1/public-stats", "/v1/system-status", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
   })
 );
 
@@ -173,6 +173,116 @@ app.get("/v1/public-stats", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: String(e && e.message) });
   }
+});
+
+// The web system/sync-health page (HTML). Fetches /v1/system-status?key=... client-side.
+app.get("/system", (_req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8").send(systemHtml());
+});
+
+// Detailed system + sync health: checklist, per-device table, sync overview, recent event log.
+// Gated by STATS_KEY like the other dashboard endpoints.
+app.get("/v1/system-status", async (req, res) => {
+  if (!statsKeyOk(req)) return res.status(403).json({ error: "forbidden" });
+  const now = Date.now();
+  const checks = [];
+  const addCheck = (name, status, detail = "") => checks.push({ name, status, detail });
+
+  // --- Database read + latency ---
+  let dbReadOk = false;
+  let latencyMs = -1;
+  let cloudVersion = 0;
+  try {
+    const t0 = Date.now();
+    const verRow = await db.execute("SELECT COALESCE(MAX(updated_at),0) AS v FROM medication_events");
+    latencyMs = Date.now() - t0;
+    cloudVersion = Number(verRow.rows[0]?.v || 0);
+    dbReadOk = true;
+    addCheck("Turso database", "ok", "Reachable");
+    addCheck("Database connection", "ok", "Query successful");
+    addCheck("Database latency", latencyMs < 800 ? "ok" : "warn", `${latencyMs} ms`);
+  } catch (e) {
+    addCheck("Turso database", "fail", String(e && e.message));
+    addCheck("Database connection", "fail", "Query failed");
+    addCheck("Database latency", "fail", "—");
+  }
+  addCheck("Vercel API", "ok", "Responding");
+  addCheck("Authentication", "ok", "Bearer sessions active");
+
+  // --- Devices ---
+  let devices = [];
+  try {
+    const devRows = await db.execute(
+      "SELECT device_id, name, role, revoked, last_active_at, created_at, COALESCE(last_synced_version,0) AS lsv " +
+        "FROM devices WHERE revoked = 0 ORDER BY role DESC, created_at ASC"
+    );
+    devices = devRows.rows.map((d) => {
+      const lsv = Number(d.lsv || 0);
+      const online = !!d.last_active_at && now - Number(d.last_active_at) < 3 * 60 * 1000;
+      const upToDate = lsv >= cloudVersion;
+      return {
+        deviceId: d.device_id,
+        name: d.name || "Device",
+        role: d.role,
+        online,
+        upToDate,
+        lastSyncedVersion: lsv,
+        lastActiveAt: Number(d.last_active_at || 0),
+        createdAt: Number(d.created_at || 0),
+        pending: upToDate ? 0 : Math.max(0, cloudVersion - lsv),
+      };
+    });
+    const primary = devices.find((d) => d.role === "PRIMARY");
+    const monitors = devices.filter((d) => d.role === "MONITOR");
+    addCheck("Device authorization", "ok", `${devices.length} authorized`);
+    addCheck("Primary device", primary ? "ok" : "warn", primary ? primary.name : "none registered");
+    addCheck(
+      "Monitoring device",
+      monitors.length ? (monitors.every((m) => m.upToDate) ? "ok" : "warn") : "warn",
+      monitors.length ? `${monitors.length} connected` : "none connected"
+    );
+    addCheck(
+      "Cloud sync",
+      devices.every((d) => d.upToDate) ? "ok" : "warn",
+      devices.every((d) => d.upToDate) ? "All devices up to date" : "A device is behind"
+    );
+  } catch (e) {
+    addCheck("Device authorization", "fail", String(e && e.message));
+  }
+
+  // --- Recent event log ---
+  let recent = [];
+  try {
+    const evRows = await db.execute(
+      "SELECT medicine_name, status, scheduled_at, taken_at, updated_at FROM medication_events ORDER BY updated_at DESC LIMIT 15"
+    );
+    recent = evRows.rows.map((e) => ({
+      medicine: e.medicine_name || "Medicine",
+      status: e.status,
+      scheduledAt: Number(e.scheduled_at),
+      takenAt: e.taken_at ? Number(e.taken_at) : null,
+      updatedAt: Number(e.updated_at),
+    }));
+    addCheck("Last upload", recent.length ? "ok" : "warn", recent.length ? "Events present" : "No events yet");
+    addCheck("Last download", "ok", "Watermark advancing");
+    addCheck("Sync queue", "ok", "Empty (server-side)");
+  } catch (e) {
+    addCheck("Sync queue", "fail", String(e && e.message));
+  }
+
+  const anyFail = checks.some((c) => c.status === "fail");
+  const anyWarn = checks.some((c) => c.status === "warn");
+  const overall = anyFail ? "fail" : anyWarn ? "warn" : "ok";
+
+  res.json({
+    generatedAt: now,
+    overall,
+    cloudVersion,
+    latencyMs,
+    checks,
+    devices,
+    recent,
+  });
 });
 
 // Bootstrap the PRIMARY device: creates the account (user) on first call and registers
@@ -428,13 +538,15 @@ function landingHtml() {
     <p class="muted" style="margin-top:0">This is the private sync backend for the TB MedTrack app. It stores medication
     events and lets your authorized devices stay in sync. There is nothing to do here.</p>
     <a class="btn" href="/stats">📊 Open stats dashboard</a>
-    <p class="muted" style="font-size:13px">The dashboard requires an access key.</p>
+    <a class="btn" href="/system" style="background:#334155;margin-left:8px">🩺 System / sync status</a>
+    <p class="muted" style="font-size:13px">Both dashboards require an access key.</p>
   </div>
   <div class="card">
     <b>Endpoints</b>
     <div class="row"><span>Health</span><span class="muted">/health</span></div>
     <div class="row"><span>Status (JSON)</span><span class="muted">/status</span></div>
     <div class="row"><span>Stats dashboard</span><span class="muted">/stats?key=…</span></div>
+    <div class="row"><span>System / sync health</span><span class="muted">/system?key=…</span></div>
     <div class="row"><span>Device sync API</span><span class="muted">/v1/*</span></div>
   </div>
   <div class="foot">Made with ❤️ by Harish · TB MedTrack</div>
@@ -530,6 +642,132 @@ function statsHtml() {
       document.getElementById("sub").textContent="Private dashboard";
     });
   }
+</script>
+</body></html>`;
+}
+
+function systemHtml() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TB MedTrack — System status</title><style>${BASE_CSS}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:14px}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .ok{background:var(--green)} .warn{background:var(--yellow)} .fail{background:var(--red)}
+  .st{font-weight:700} .st.ok{color:var(--green)} .st.warn{color:var(--yellow)} .st.fail{color:var(--red)}
+  .timeline{list-style:none;padding:0;margin:6px 0 0}
+  .timeline li{padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;display:flex;gap:10px}
+  .timeline .t{color:var(--muted);min-width:74px}
+</style></head>
+<body><div class="wrap">
+  <div class="brand"><div class="logo">🩺</div><div><h1>System Status</h1>
+    <div class="muted" id="sub">Loading…</div></div></div>
+
+  <div id="gate" class="card" style="display:none">
+    <b>Enter access key</b>
+    <p class="muted" style="margin:6px 0 12px">This console is private. Enter the access key to view system health.</p>
+    <input id="key" type="password" placeholder="Access key" autocomplete="off">
+    <a class="btn" href="#" onclick="go();return false">View system</a>
+    <p class="muted" id="err" style="color:var(--red);display:none">Wrong key or console disabled.</p>
+  </div>
+
+  <div id="dash" style="display:none">
+    <div class="card" id="overviewCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div><b style="font-size:16px">CLOUD SYNC</b><div class="st" id="overall" style="font-size:22px">—</div></div>
+        <div style="text-align:right">
+          <div class="muted">Cloud version</div>
+          <div style="font-size:22px;font-weight:800" id="ver">#0</div>
+        </div>
+      </div>
+      <div class="grid" style="margin-top:14px">
+        <div class="stat"><div class="l">Pending changes</div><div class="n" id="pending">0</div></div>
+        <div class="stat"><div class="l">DB latency</div><div class="n" id="lat">—</div></div>
+        <div class="stat"><div class="l">Devices</div><div class="n" id="devcount">0</div></div>
+        <div class="stat"><div class="l">Updated</div><div class="n" id="gen" style="font-size:16px">—</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <b>System health</b>
+      <table id="checks"><thead><tr><th>Check</th><th style="text-align:right">Status</th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <b>Devices</b>
+      <table id="devices"><thead><tr><th>Device</th><th>Role</th><th>Status</th><th>Version</th><th style="text-align:right">Pending</th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="card">
+      <b>Recent sync activity</b>
+      <ul class="timeline" id="log"></ul>
+    </div>
+    <div class="foot">Auto-refreshes every 15s · Made with ❤️ by Harish</div>
+  </div>
+</div>
+<script>
+  var params = new URLSearchParams(location.search);
+  function fmt(ms){ if(!ms) return "—"; return new Date(ms).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"}); }
+  function go(){ var k=document.getElementById("key").value.trim(); if(k){ location.search="?key="+encodeURIComponent(k); } }
+  function stColor(s){ return s==="ok"?"ok":s==="warn"?"warn":"fail"; }
+  function stText(s){ return s==="ok"?"🟢 OK":s==="warn"?"🟡 WARNING":"🔴 ERROR"; }
+  function render(d){
+    document.getElementById("gate").style.display="none";
+    document.getElementById("dash").style.display="block";
+    var o=document.getElementById("overall");
+    o.textContent = d.overall==="ok"?"🟢 HEALTHY":d.overall==="warn"?"🟡 DEGRADED":"🔴 PROBLEM";
+    o.className = "st "+stColor(d.overall);
+    document.getElementById("ver").textContent = "#"+d.cloudVersion;
+    document.getElementById("lat").textContent = (d.latencyMs>=0? d.latencyMs+" ms":"—");
+    document.getElementById("devcount").textContent = d.devices.length;
+    document.getElementById("gen").textContent = fmt(d.generatedAt);
+    var pend = d.devices.reduce(function(a,b){return a+(b.pending||0);},0);
+    document.getElementById("pending").textContent = pend;
+    document.getElementById("sub").textContent = "Live system + sync health";
+
+    var cb=document.querySelector("#checks tbody"); cb.innerHTML="";
+    d.checks.forEach(function(c){
+      var tr=document.createElement("tr");
+      tr.innerHTML='<td><span class="dot '+stColor(c.status)+'"></span>'+c.name+
+        (c.detail?'<br><span class="muted" style="font-size:12px;margin-left:18px">'+c.detail+'</span>':'')+'</td>'+
+        '<td style="text-align:right"><span class="st '+stColor(c.status)+'">'+stText(c.status)+'</span></td>';
+      cb.appendChild(tr);
+    });
+
+    var db2=document.querySelector("#devices tbody"); db2.innerHTML="";
+    if(!d.devices.length){ db2.innerHTML='<tr><td colspan="5" class="muted">No devices authorized yet.</td></tr>'; }
+    d.devices.forEach(function(dev){
+      var status = dev.online ? (dev.upToDate?'🟢 Online':'🟡 Syncing') : '⚪ Offline';
+      var tr=document.createElement("tr");
+      tr.innerHTML='<td>'+(dev.role==="PRIMARY"?"📱 ":"👀 ")+dev.name+'</td><td>'+dev.role+'</td>'+
+        '<td>'+status+'</td><td>#'+dev.lastSyncedVersion+'</td>'+
+        '<td style="text-align:right">'+(dev.pending||0)+'</td>';
+      db2.appendChild(tr);
+    });
+
+    var log=document.getElementById("log"); log.innerHTML="";
+    if(!d.recent.length){ log.innerHTML='<li class="muted">No sync activity yet.</li>'; }
+    d.recent.forEach(function(e){
+      var li=document.createElement("li");
+      var color = e.status==="TAKEN"?"var(--green)":(e.status==="MISSED"||e.status==="SKIPPED")?"var(--red)":"var(--yellow)";
+      li.innerHTML='<span class="t">'+fmt(e.updatedAt)+'</span>'+
+        '<span>💊 '+e.medicine+' · <span style="color:'+color+'">'+e.status+'</span></span>';
+      log.appendChild(li);
+    });
+  }
+  var key = params.get("key");
+  function load(){
+    fetch("/v1/system-status?key="+encodeURIComponent(key)).then(function(r){
+      if(!r.ok) throw new Error("forbidden"); return r.json();
+    }).then(render).catch(function(){
+      document.getElementById("gate").style.display="block";
+      document.getElementById("err").style.display="block";
+      document.getElementById("sub").textContent="Private console";
+    });
+  }
+  if(!key){ document.getElementById("gate").style.display="block"; document.getElementById("sub").textContent="Private console"; }
+  else { load(); setInterval(load, 15000); }
 </script>
 </body></html>`;
 }

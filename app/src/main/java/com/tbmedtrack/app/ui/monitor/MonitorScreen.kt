@@ -86,6 +86,15 @@ fun MonitorScreen(personName: String = "Medication", vm: MonitorViewModel = view
             }
         }
 
+        // Always-on sync status + manual CHECK SYNC.
+        item {
+            SyncStatusCard(
+                state = state,
+                clock = { m -> clock(m) },
+                onCheckSync = { vm.checkSync() }
+            )
+        }
+
         // Red critical cards first.
         items(critical, key = { "crit-${it.scheduledMillis}" }) { dose ->
             CriticalMonitorCard(
@@ -131,6 +140,52 @@ fun MonitorScreen(personName: String = "Medication", vm: MonitorViewModel = view
                 color = DarkOnSurfaceMuted
             )
         }
+    }
+}
+
+@Composable
+private fun SyncStatusCard(
+    state: MonitorUiState,
+    clock: (Long) -> String,
+    onCheckSync: () -> Unit
+) {
+    val s = state.sync
+    val phaseLabel = when {
+        !s.configured -> "⚪ Local only"
+        s.phase == com.tbmedtrack.app.sync.SyncPhase.SYNCING -> "🔄 Checking…"
+        s.phase == com.tbmedtrack.app.sync.SyncPhase.OFFLINE -> "🔴 Offline"
+        s.phase == com.tbmedtrack.app.sync.SyncPhase.ERROR -> "🔴 Sync error"
+        else -> "🟢 Up to date"
+    }
+    SectionCard(contentPadding = 16.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Cloud sync", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+            Text(phaseLabel, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        }
+        Spacer(Modifier.height(8.dp))
+        if (s.lastDownloadAt > 0L) {
+            Text("Last downloaded ${clock(s.lastDownloadAt)}", style = MaterialTheme.typography.bodySmall, color = DarkOnSurfaceMuted)
+        }
+        if (s.cloudVersion > 0L) {
+            Text("Cloud version #${s.cloudVersion}", style = MaterialTheme.typography.bodySmall, color = DarkOnSurfaceMuted)
+        }
+        if (state.nextCheckLabel.isNotBlank()) {
+            Text("Next auto-check ~${state.nextCheckLabel}", style = MaterialTheme.typography.bodySmall, color = DarkOnSurfaceMuted)
+        }
+        state.lastCheck?.let { chk ->
+            Spacer(Modifier.height(6.dp))
+            Text(
+                (if (chk.overallOk) "✅ " else "⚠️ ") + chk.overallLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (chk.overallOk) StatusTaken else StatusUpcoming
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = onCheckSync,
+            enabled = !state.checkingSync,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text(if (state.checkingSync) "Checking sync…" else "CHECK SYNC") }
     }
 }
 

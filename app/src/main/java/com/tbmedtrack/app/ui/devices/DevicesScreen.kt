@@ -123,16 +123,46 @@ fun DevicesScreen(vm: DevicesViewModel = viewModel()) {
             }
         }
 
-        item { Text("Devices", style = MaterialTheme.typography.titleLarge) }
+        item {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("Devices", style = MaterialTheme.typography.titleLarge)
+                    if (ui.cloudVersion > 0L) {
+                        Text(
+                            "Cloud version #${ui.cloudVersion}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                TextButton(onClick = { vm.refreshDevices() }, enabled = !ui.refreshing) {
+                    Text(if (ui.refreshing) "Refreshing…" else "Refresh")
+                }
+            }
+        }
 
         items(devices) { device ->
-            DeviceRow(device, onRevoke = { vm.revoke(device.deviceId) })
+            DeviceRow(
+                device = device,
+                syncInfo = ui.deviceSync[device.deviceId],
+                cloudVersion = ui.cloudVersion,
+                onRevoke = { vm.revoke(device.deviceId) }
+            )
         }
     }
 }
 
 @Composable
-private fun DeviceRow(device: Device, onRevoke: () -> Unit) {
+private fun DeviceRow(
+    device: Device,
+    syncInfo: DeviceSyncInfo?,
+    cloudVersion: Long,
+    onRevoke: () -> Unit
+) {
     SectionCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -140,17 +170,30 @@ private fun DeviceRow(device: Device, onRevoke: () -> Unit) {
                     style = MaterialTheme.typography.titleMedium)
                 Text(
                     when (device.role) {
-                        DeviceRole.PRIMARY -> "Primary"
-                        DeviceRole.MONITOR -> "Monitor"
+                        DeviceRole.PRIMARY -> "Primary (patient)"
+                        DeviceRole.MONITOR -> "Monitor (view only)"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    if (device.online) "Online" else "Last active recently",
+                    if (device.online) "🟢 Connected" else "Last active recently",
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (device.online) StatusTaken else MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (syncInfo != null) {
+                    val label = if (syncInfo.upToDate) {
+                        "Synced · #${syncInfo.lastSyncedVersion}"
+                    } else {
+                        "🟡 Behind · #${syncInfo.lastSyncedVersion}" +
+                            (if (cloudVersion > 0L) " / #$cloudVersion" else "")
+                    }
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (syncInfo.upToDate) StatusTaken else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             if (!device.isThisDevice) {
                 TextButton(onClick = onRevoke) {

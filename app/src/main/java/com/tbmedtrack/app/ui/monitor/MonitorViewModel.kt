@@ -31,7 +31,15 @@ data class MonitorUiState(
     val emergencyContact: String = "",
     val lastSyncedLabel: String = "",
     /** true if at least one monitored dose is in the critical (not-taken, overdue) state */
-    val anyCritical: Boolean = false
+    val anyCritical: Boolean = false,
+    /** live cloud-sync status for the monitor's sync surface */
+    val sync: com.tbmedtrack.app.sync.SyncStatus = com.tbmedtrack.app.sync.SyncStatus(),
+    /** true while a manual CHECK SYNC is running */
+    val checkingSync: Boolean = false,
+    /** result of the last manual CHECK SYNC, if any */
+    val lastCheck: com.tbmedtrack.app.sync.SyncCheckResult? = null,
+    /** clock label for when the monitor will next auto-check */
+    val nextCheckLabel: String = ""
 )
 
 /**
@@ -54,7 +62,13 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
 
     private val criticalThresholdMs = 60 * 60_000L // 1h past schedule = critical for monitoring
 
-    init { startPolling() }
+    /** Auto-check cadence for the monitor: every 10 minutes (NO UPDATE = NO ACTION). */
+    private val pollIntervalMs = 10 * 60_000L
+
+    init {
+        startPolling()
+        observeSync()
+    }
 
     /** Sync + recompute now (also called on resume). */
     fun refresh() {
@@ -64,12 +78,35 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Manual CHECK SYNC from the monitor's sync surface. */
+    fun checkSync() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(checkingSync = true)
+            val result = runCatching { syncManager.checkSync() }.getOrNull()
+            recompute()
+            _state.value = _state.value.copy(checkingSync = false, lastCheck = result)
+        }
+    }
+
+    /** Mirror the always-on sync status into the monitor UI state. */
+    private fun observeSync() {
+        viewModelScope.launch {
+            syncManager.status.collect { s ->
+                _state.value = _state.value.copy(sync = s)
+            }
+        }
+    }
+
     private fun startPolling() {
         viewModelScope.launch {
             while (true) {
                 runCatching { syncManager.reconfigure(); syncManager.syncNow() }
                 recompute()
-                delay(60_000L) // poll once a minute; state-driven, not a running timer
+                _state.value = _state.value.copy(
+                    nextCheckLabel = clock(System.currentTimeMillis() + pollIntervalMs)
+                )
+                // Auto-check every 10 minutes; state-driven, not a running timer.
+                delay(pollIntervalMs)
             }
         }
     }
@@ -114,7 +151,7 @@ class MonitorViewModel(app: Application) : AndroidViewModel(app) {
             }
         }.sortedBy { it.scheduledMillis }
 
-        _state.value = MonitorUiState(
+        _state.value = _state.value.copy(
             loading = false,
             doses = monitored,
             emergencyContact = contact,
