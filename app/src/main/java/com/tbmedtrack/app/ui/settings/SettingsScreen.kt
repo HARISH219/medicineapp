@@ -105,6 +105,8 @@ fun SettingsScreen(
             }
         }
 
+        item { DeviceAndContactCard(settings, context, onSetContact = { vm.setEmergencyContact(it) }, onOpenDevices = onOpenDevices) }
+
         item { AlertPermissionsCard(context) }
 
         item {
@@ -520,6 +522,75 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 private fun ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
     FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
 }
+
+/** Device role + emergency/trusted contact (editable) + Test Call. */
+@Composable
+private fun DeviceAndContactCard(
+    settings: com.tbmedtrack.app.data.settings.AppSettings,
+    context: android.content.Context,
+    onSetContact: (String) -> Unit,
+    onOpenDevices: () -> Unit
+) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(settings.emergencyContact) { mutableStateOf(settings.emergencyContact) }
+    val roleLabel = when (settings.deviceRole) {
+        com.tbmedtrack.app.data.settings.DeviceRoleValue.MAIN -> "📱 Main Device"
+        com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY -> "👀 Secondary Device"
+        else -> "Not set"
+    }
+    SectionCard {
+        Text("Device", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("This device", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(roleLabel, style = MaterialTheme.typography.titleMedium)
+        }
+        Spacer(Modifier.height(10.dp))
+        OutlinedButton(onClick = onOpenDevices, modifier = Modifier.fillMaxWidth()) { Text("Connected devices") }
+
+        Spacer(Modifier.height(16.dp))
+        Text("Emergency / trusted contact", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(6.dp))
+        if (editing) {
+            androidx.compose.material3.OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Phone
+                )
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.Button(onClick = { onSetContact(draft.trim()); editing = false }) { Text("Save") }
+                OutlinedButton(onClick = { draft = settings.emergencyContact; editing = false }) { Text("Cancel") }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(settings.emergencyContact.ifBlank { "Not set" }, style = MaterialTheme.typography.bodyLarge)
+                TextButton(onClick = { editing = true }) { Text("Edit") }
+            }
+            Spacer(Modifier.height(4.dp))
+            OutlinedButton(
+                onClick = {
+                    val digits = settings.emergencyContact.filter { it.isDigit() || it == '+' }
+                    if (digits.isNotBlank()) runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.content.Intent.ACTION_DIAL,
+                                android.net.Uri.parse("tel:$digits")
+                            )
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("📞 Test Call") }
+        }
+    }
+}
+
+
 
 /**
  * Alert-permissions checklist. Shows a summary ("Ready ✓" / "needs attention ⚠") and a row per

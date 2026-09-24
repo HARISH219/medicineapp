@@ -131,6 +131,11 @@ class AlarmReceiver : BroadcastReceiver() {
             sound = settings?.soundEnabled ?: true,
             vibration = settings?.vibrationEnabled ?: true
         )
+        // Persist a syncable "critical open" marker so a Secondary/monitoring device sees the
+        // critical state via sync (both devices enter critical). A later TAKEN clears it.
+        if (escalation >= 1) {
+            runCatching { repo.markEventCriticalOpen(epochDay, timeMinutes) }
+        }
         // Notify monitor devices via the sync layer (real push happens through the backend).
         ServiceLocator.syncManager(context).queue()
 

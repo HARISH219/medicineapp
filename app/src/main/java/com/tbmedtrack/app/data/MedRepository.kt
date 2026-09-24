@@ -461,6 +461,30 @@ class MedRepository(
         }
     }
 
+    /**
+     * Persist the doses of an event as a syncable "critical open" marker (status MISSED) so a
+     * monitoring/secondary device can see, via sync, that a dose reached the critical state and
+     * has not been recorded. A later TAKEN overrides MISSED (merge is TAKEN-authoritative), which
+     * clears the monitor's critical state automatically. Idempotent; does not touch already-TAKEN
+     * doses. Called by the critical alarm path — NOT a user action.
+     */
+    suspend fun markEventCriticalOpen(epochDay: Long, timeMinutes: Int) {
+        val date = LocalDate.ofEpochDay(epochDay)
+        val doses = getDosesForDay(date).filter { it.timeMinutes == timeMinutes }
+        for (dose in doses) {
+            if (dose.status == DoseStatus.TAKEN) continue
+            val existing = logDao.findLog(dose.medicineId, dose.scheduleId, dose.scheduledMillis)
+            // Only (re)write when not already MISSED, to avoid needless sync churn.
+            if (existing?.status == DoseStatus.MISSED) continue
+            writeEvent(
+                (existing ?: logRow(dose, DoseStatus.MISSED, null)).copy(status = DoseStatus.MISSED),
+                action = com.tbmedtrack.app.data.db.AuditAction.MISS,
+                operationType = com.tbmedtrack.app.data.db.OperationType.MEDICATION_HISTORICAL,
+                oldStatus = existing?.status ?: DoseStatus.SCHEDULED
+            )
+        }
+    }
+
     /** Mark all doses at a given time on a day as taken. Returns the taken timestamp. */
     suspend fun markEventTaken(epochDay: Long, timeMinutes: Int): Long {
         val date = LocalDate.ofEpochDay(epochDay)

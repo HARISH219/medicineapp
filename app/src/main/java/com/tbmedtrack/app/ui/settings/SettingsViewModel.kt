@@ -61,6 +61,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         ServiceLocator.foodGapScheduler(getApplication()).rescheduleForToday()
         ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
     }
+    fun setEmergencyContact(number: String) = viewModelScope.launch { settings.setEmergencyContact(number) }
 
     fun exportBackup(uri: Uri) = viewModelScope.launch {
         val result = backup.export(uri)

@@ -31,13 +31,18 @@ class TbMedApplication : Application() {
                 val settings = ServiceLocator.settingsRepository(this@TbMedApplication)
                 RegimenSeeder(repo, settings).seedIfNeeded()
                 // Load the active tracking start so past unconfigured days are never "missed".
-                repo.trackingStartDay = settings.settings.first().trackingStartDay
-                // (Re)register reminders and critical escalation chains.
-                ServiceLocator.alarmScheduler(this@TbMedApplication).rescheduleAll()
-                ServiceLocator.criticalAlarmScheduler(this@TbMedApplication).rescheduleTodayAndFuture()
-                // Re-arm today's food → medicine gap chains (early/eligible + food-adjusted critical).
-                ServiceLocator.foodGapScheduler(this@TbMedApplication).rescheduleForToday()
-                // Pick RemoteSyncClient if a backend URL is configured, then drain pending sync.
+                val appSettings = settings.settings.first()
+                repo.trackingStartDay = appSettings.trackingStartDay
+                val isSecondary = appSettings.deviceRole ==
+                    com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY
+                // A SECONDARY (monitoring) device must NOT schedule normal reminders, food
+                // reminders, or its own critical escalation — it only monitors synced state.
+                if (!isSecondary) {
+                    ServiceLocator.alarmScheduler(this@TbMedApplication).rescheduleAll()
+                    ServiceLocator.criticalAlarmScheduler(this@TbMedApplication).rescheduleTodayAndFuture()
+                    ServiceLocator.foodGapScheduler(this@TbMedApplication).rescheduleForToday()
+                }
+                // Both roles sync (the secondary pulls status; the main pushes events).
                 ServiceLocator.syncManager(this@TbMedApplication).reconfigure()
                 ServiceLocator.syncManager(this@TbMedApplication).syncNow()
                 // Refresh any placed home-screen widgets with current status.

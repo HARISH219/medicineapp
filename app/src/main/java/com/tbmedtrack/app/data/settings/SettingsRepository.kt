@@ -50,7 +50,17 @@ data class AppSettings(
     val notifyMonitorTaken: Boolean = true,
     val notifyMonitorCritical: Boolean = true,
     /** accessibility: disable the flashing/pulsing critical animation */
-    val reduceMotion: Boolean = false
+    val reduceMotion: Boolean = false,
+    /**
+     * This device's role in the Main/Secondary architecture: "MAIN" (personal medicine device,
+     * receives all reminders/alarms) or "SECONDARY" (monitoring device, only critical alerts +
+     * CALL). Empty until chosen in the setup wizard.
+     */
+    val deviceRole: String = "",
+    /** trusted / emergency contact the Secondary device can CALL. Configurable. */
+    val emergencyContact: String = "+91 6371658332",
+    /** true once the first-launch setup wizard (permissions + device type) has completed */
+    val setupWizardDone: Boolean = false
 )
 
 class SettingsRepository(private val context: Context) {
@@ -76,6 +86,9 @@ class SettingsRepository(private val context: Context) {
         val NOTIFY_TAKEN = booleanPreferencesKey("notify_taken")
         val NOTIFY_CRITICAL = booleanPreferencesKey("notify_critical")
         val REDUCE_MOTION = booleanPreferencesKey("reduce_motion")
+        val DEVICE_ROLE = stringPreferencesKey("device_role")
+        val EMERGENCY_CONTACT = stringPreferencesKey("emergency_contact")
+        val SETUP_WIZARD_DONE = booleanPreferencesKey("setup_wizard_done")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data.map { p ->
@@ -100,7 +113,10 @@ class SettingsRepository(private val context: Context) {
             notifyMonitorNotRecorded = p[Keys.NOTIFY_NOT_RECORDED] ?: true,
             notifyMonitorTaken = p[Keys.NOTIFY_TAKEN] ?: true,
             notifyMonitorCritical = p[Keys.NOTIFY_CRITICAL] ?: true,
-            reduceMotion = p[Keys.REDUCE_MOTION] ?: false
+            reduceMotion = p[Keys.REDUCE_MOTION] ?: false,
+            deviceRole = p[Keys.DEVICE_ROLE] ?: "",
+            emergencyContact = p[Keys.EMERGENCY_CONTACT] ?: "+91 6371658332",
+            setupWizardDone = p[Keys.SETUP_WIZARD_DONE] ?: false
         )
     }
 
@@ -124,4 +140,13 @@ class SettingsRepository(private val context: Context) {
     suspend fun setNotifyTaken(v: Boolean) = context.dataStore.edit { it[Keys.NOTIFY_TAKEN] = v }
     suspend fun setNotifyCritical(v: Boolean) = context.dataStore.edit { it[Keys.NOTIFY_CRITICAL] = v }
     suspend fun setReduceMotion(v: Boolean) = context.dataStore.edit { it[Keys.REDUCE_MOTION] = v }
+    suspend fun setDeviceRole(role: String) = context.dataStore.edit { it[Keys.DEVICE_ROLE] = role }
+    suspend fun setEmergencyContact(number: String) = context.dataStore.edit { it[Keys.EMERGENCY_CONTACT] = number }
+    suspend fun setSetupWizardDone(done: Boolean) = context.dataStore.edit { it[Keys.SETUP_WIZARD_DONE] = done }
+}
+
+/** Device role constants used with [AppSettings.deviceRole]. */
+object DeviceRoleValue {
+    const val MAIN = "MAIN"
+    const val SECONDARY = "SECONDARY"
 }

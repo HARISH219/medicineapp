@@ -42,6 +42,22 @@ class SyncManager(private val context: Context) {
 
     fun secureStore(): SecureStore = secureStore
 
+    /**
+     * Redeem a pairing code so THIS device becomes a MONITOR/secondary linked to the main
+     * device's account. Requires a configured backend URL. Returns true on success. After
+     * redeeming, pulls the current event state so the monitor can display it immediately.
+     */
+    suspend fun redeemCode(code: String, deviceName: String): Boolean {
+        reconfigure()
+        if (!client.isConfigured && secureStore.baseUrl.isNullOrBlank()) return false
+        val redeemed = client.redeemAuthCode(code, deviceName).isSuccess
+        if (redeemed) {
+            reconfigure() // now has a session token -> becomes a real RemoteSyncClient
+            runCatching { syncNow() }
+        }
+        return redeemed
+    }
+
     /** Queue a just-recorded event for upload. Safe to call from any thread. */
     fun queue() {
         scope.launch { runCatching { syncNow() } }

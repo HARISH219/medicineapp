@@ -46,6 +46,8 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
+                    val isSecondary = settings.deviceRole ==
+                        com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY
                     when {
                         !settings.onboardingDone -> {
                             OnboardingScreen(onFinished = {
@@ -53,8 +55,26 @@ class MainActivity : ComponentActivity() {
                                 requestNotificationPermission(notifPermissionLauncher)
                             })
                         }
-                        // After the intro, run first-setup (treatment start + optional history
-                        // import) until active tracking has been started.
+                        // First-launch setup wizard: permissions + device-type selection. Runs
+                        // until the user picks Main (or connects a Secondary).
+                        !settings.setupWizardDone -> {
+                            com.tbmedtrack.app.ui.wizard.SetupWizardScreen(
+                                onRequestNotificationPermission = {
+                                    requestNotificationPermission(notifPermissionLauncher)
+                                },
+                                onMainChosen = { /* state flips via setupWizardDone */ },
+                                onSecondaryConnected = { /* state flips via setupWizardDone */ }
+                            )
+                        }
+                        // SECONDARY device: monitoring-only view (no reminders/alarms UI).
+                        isSecondary -> {
+                            LaunchedEffect(Unit) {
+                                ServiceLocator.syncManager(this@MainActivity).reconfigure()
+                                ServiceLocator.syncManager(this@MainActivity).syncNow()
+                            }
+                            com.tbmedtrack.app.ui.monitor.MonitorScreen()
+                        }
+                        // MAIN device first-setup (treatment start + optional history import).
                         settings.trackingStartDay == 0L -> {
                             com.tbmedtrack.app.ui.setup.SetupScreen(onDone = { /* state flips via settings */ })
                         }
