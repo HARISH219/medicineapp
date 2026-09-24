@@ -30,6 +30,30 @@ if (!TURSO_DATABASE_URL || !TURSO_AUTH_TOKEN) {
 
 const db = createClient({ url: TURSO_DATABASE_URL, authToken: TURSO_AUTH_TOKEN });
 
+// Idempotent, run-once schema self-heal. The sync-version tracking (migration 006) adds a
+// `last_synced_version` column to `devices`; if the live DB predates it, several endpoints
+// error with "no such column: last_synced_version". Rather than require a manual migrate.js
+// run after deploy, we add the column lazily on the first DB-touching request and tolerate
+// "duplicate column" so it is safe to call repeatedly / concurrently.
+let schemaReady = null;
+function ensureSchema() {
+  if (schemaReady) return schemaReady;
+  schemaReady = (async () => {
+    try {
+      await db.execute("ALTER TABLE devices ADD COLUMN last_synced_version INTEGER NOT NULL DEFAULT 0");
+    } catch (e) {
+      const msg = String((e && e.message) || "").toLowerCase();
+      // Column already exists (normal steady state) — not an error.
+      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
+        // Any other failure: don't cache a bad result, allow a retry next request.
+        schemaReady = null;
+        throw e;
+      }
+    }
+  })();
+  return schemaReady;
+}
+
 // Optional FCM — initialized lazily on first push so there is NO top-level await
 // (top-level await can break serverless bundling on some platforms).
 let messaging = null;
@@ -65,6 +89,8 @@ function newToken() {
 
 // --- auth middleware: Bearer <deviceSessionToken> ---
 async function auth(req, res, next) {
+  // Guarantee the sync-version column exists before any device query runs (self-heal).
+  await ensureSchema().catch(() => {});
   const header = req.headers["authorization"] || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: "missing token" });
@@ -188,19 +214,42 @@ app.get("/v1/system-status", async (req, res) => {
   const checks = [];
   const addCheck = (name, status, detail = "") => checks.push({ name, status, detail });
 
+  // Make sure the sync-version column exists before we query it (self-heal on old DBs).
+  await ensureSchema().catch(() => {});
+
   // --- Database read + latency ---
+  // Run the three independent reads concurrently so the reported latency reflects one
+  // round-trip of wall-clock time, not the sum of three sequential remote calls.
   let dbReadOk = false;
   let latencyMs = -1;
   let cloudVersion = 0;
+  let devRowsResult = null;
+  let evRowsResult = null;
   try {
     const t0 = Date.now();
-    const verRow = await db.execute("SELECT COALESCE(MAX(updated_at),0) AS v FROM medication_events");
+    const [verRow, devRows, evRows] = await Promise.all([
+      db.execute("SELECT COALESCE(MAX(updated_at),0) AS v FROM medication_events"),
+      db.execute(
+        "SELECT device_id, name, role, revoked, last_active_at, created_at, COALESCE(last_synced_version,0) AS lsv " +
+          "FROM devices WHERE revoked = 0 ORDER BY role DESC, created_at ASC"
+      ),
+      db.execute(
+        "SELECT medicine_name, status, scheduled_at, taken_at, updated_at FROM medication_events ORDER BY updated_at DESC LIMIT 15"
+      ),
+    ]);
     latencyMs = Date.now() - t0;
     cloudVersion = Number(verRow.rows[0]?.v || 0);
+    devRowsResult = devRows;
+    evRowsResult = evRows;
     dbReadOk = true;
     addCheck("Turso database", "ok", "Reachable");
     addCheck("Database connection", "ok", "Query successful");
-    addCheck("Database latency", latencyMs < 800 ? "ok" : "warn", `${latencyMs} ms`);
+    // Turso is a remote DB, so a healthy round-trip is naturally a few hundred ms.
+    addCheck(
+      "Database latency",
+      latencyMs < 600 ? "ok" : latencyMs < 1200 ? "warn" : "fail",
+      `${latencyMs} ms`
+    );
   } catch (e) {
     addCheck("Turso database", "fail", String(e && e.message));
     addCheck("Database connection", "fail", "Query failed");
@@ -211,11 +260,10 @@ app.get("/v1/system-status", async (req, res) => {
 
   // --- Devices ---
   let devices = [];
-  try {
-    const devRows = await db.execute(
-      "SELECT device_id, name, role, revoked, last_active_at, created_at, COALESCE(last_synced_version,0) AS lsv " +
-        "FROM devices WHERE revoked = 0 ORDER BY role DESC, created_at ASC"
-    );
+  if (!dbReadOk) {
+    addCheck("Device authorization", "fail", "Database unavailable");
+  } else try {
+    const devRows = devRowsResult || { rows: [] };
     devices = devRows.rows.map((d) => {
       const lsv = Number(d.lsv || 0);
       const online = !!d.last_active_at && now - Number(d.last_active_at) < 3 * 60 * 1000;
@@ -251,11 +299,12 @@ app.get("/v1/system-status", async (req, res) => {
   }
 
   // --- Recent event log ---
+  // Uses the rows already fetched in the parallel batch above (no extra round-trip).
   let recent = [];
-  try {
-    const evRows = await db.execute(
-      "SELECT medicine_name, status, scheduled_at, taken_at, updated_at FROM medication_events ORDER BY updated_at DESC LIMIT 15"
-    );
+  if (!dbReadOk) {
+    addCheck("Sync queue", "fail", "Database unavailable");
+  } else try {
+    const evRows = evRowsResult || { rows: [] };
     recent = evRows.rows.map((e) => ({
       medicine: e.medicine_name || "Medicine",
       status: e.status,
