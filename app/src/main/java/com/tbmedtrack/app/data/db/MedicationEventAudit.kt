@@ -29,6 +29,8 @@ data class MedicationEventAudit(
 /** Audit action names. */
 object AuditAction {
     const val MARK_TAKEN = "MARK_TAKEN"
+    /** Recorded after the scheduled day/window as a correction ("Added later"). */
+    const val MARK_TAKEN_LATE = "MARK_TAKEN_LATE"
     const val REVERT = "REVERT"
     const val SNOOZE = "SNOOZE"
     const val IMPORT_HISTORICAL = "IMPORT_HISTORICAL"

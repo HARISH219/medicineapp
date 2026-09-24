@@ -33,4 +33,17 @@ class HistoryViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = HistoryUiState(epochDay, events, false)
         }
     }
+
+    /**
+     * Record a PAST dose event as taken (back-fill / correction). [actualTakenAt] is optional:
+     * pass null for "exact time unknown". Does NOT re-arm alarms. Syncs the correction.
+     */
+    fun markPastTaken(epochDay: Long, timeMinutes: Int, actualTakenAt: Long?) {
+        viewModelScope.launch {
+            repo.markPastDoseTaken(epochDay, timeMinutes, actualTakenAt)
+            ServiceLocator.syncManager(getApplication()).queue()
+            com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
+            load(epochDay)
+        }
+    }
 }

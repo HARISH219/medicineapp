@@ -20,11 +20,13 @@ object ReminderKeys {
     /** number of escalation steps elapsed for the event (0 = first 10AM reminder) */
     const val EXTRA_ESCALATION = "escalation"
 
-    const val CHANNEL_ID = "medication_reminders"
-    const val CHANNEL_NAME = "Medication reminders"
+    // NOTE: channel importance/sound is fixed once a channel is created by Android. Bumping the
+    // id suffix (_v2) forces a fresh HIGH-importance "Medication Alerts" channel with sound.
+    const val CHANNEL_ID = "medication_alerts_v2"
+    const val CHANNEL_NAME = "Medication Alerts"
 
-    const val CRITICAL_CHANNEL_ID = "critical_medication_alarm"
-    const val CRITICAL_CHANNEL_NAME = "Critical medication alarm"
+    const val CRITICAL_CHANNEL_ID = "critical_medication_alarm_v2"
+    const val CRITICAL_CHANNEL_NAME = "Critical Medication Alarm"
 
     /** notification id used for the single active critical morning alert */
     const val CRITICAL_NOTIFICATION_ID = 424242

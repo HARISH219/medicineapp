@@ -16,8 +16,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Divider
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -92,6 +90,8 @@ fun SettingsScreen(
                 SwitchRow("📳 Vibration", settings.vibrationEnabled) { vm.setVibration(it) }
             }
         }
+
+        item { AlertPermissionsCard(context) }
 
         item {
             SectionCard {
@@ -425,4 +425,63 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 @Composable
 private fun ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
     FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+}
+
+/**
+ * Alert-permissions checklist. Shows a summary ("Ready ✓" / "needs attention ⚠") and a row per
+ * required permission with its real OS state and a button to open the relevant settings screen.
+ * It re-checks whenever the screen resumes (e.g. after returning from system settings).
+ * It never claims the app can override silent mode / DND / manufacturer restrictions.
+ */
+@Composable
+private fun AlertPermissionsCard(context: android.content.Context) {
+    // Recompute on each resume so returning from a settings screen reflects the new state.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var refreshKey by remember { mutableStateOf(0) }
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) refreshKey++
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+    val items = remember(refreshKey) {
+        com.tbmedtrack.app.util.PermissionUtil.alertChecklist(context)
+    }
+    val allReady = items.all { it.granted }
+
+    SectionCard {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("Alert permissions", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Text(
+                if (allReady) "Ready ✓" else "Needs attention ⚠",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                color = if (allReady) com.tbmedtrack.app.ui.theme.StatusTaken
+                else com.tbmedtrack.app.ui.theme.StatusUpcoming
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "These improve reminder reliability. Android, Do Not Disturb, and some manufacturers " +
+                "can still limit alerts — no app can fully override those.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(10.dp))
+        items.forEach { item ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+            ) {
+                Text(if (item.granted) "✓" else "⚠", modifier = Modifier.width(24.dp))
+                Text(item.label, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                if (!item.granted && item.intent != null) {
+                    TextButton(onClick = { runCatching { context.startActivity(item.intent) } }) {
+                        Text(item.actionLabel)
+                    }
+                }
+            }
+        }
+    }
 }

@@ -79,7 +79,10 @@ fun HomeScreen(
         LazyColumn(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
-            contentPadding = PaddingValues(top = 14.dp, bottom = 120.dp)
+            contentPadding = PaddingValues(
+                top = 14.dp,
+                bottom = com.tbmedtrack.app.ui.components.bottomNavContentPadding()
+            )
         ) {
             item { GreetingHeader(state) }
 

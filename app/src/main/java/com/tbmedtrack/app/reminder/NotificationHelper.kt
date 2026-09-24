@@ -28,9 +28,19 @@ object NotificationHelper {
                     ReminderKeys.CHANNEL_NAME,
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
-                    description = "Reminders for your scheduled medicines"
+                    description = "High-priority reminders for your scheduled medicines"
                     enableVibration(true)
+                    vibrationPattern = longArrayOf(0, 400, 200, 400)
+                    enableLights(true)
                     setShowBadge(true)
+                    // Default notification sound so a due dose is audible when enabled.
+                    val soundUri = android.media.RingtoneManager
+                        .getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                    val attrs = android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    setSound(soundUri, attrs)
                 }
                 mgr.createNotificationChannel(channel)
             }
@@ -40,12 +50,23 @@ object NotificationHelper {
                     ReminderKeys.CRITICAL_CHANNEL_NAME,
                     NotificationManager.IMPORTANCE_HIGH
                 ).apply {
-                    description = "Critical alarm when a required dose has not been recorded"
+                    description = "Escalating alarm when a required dose has not been recorded"
                     enableVibration(true)
                     vibrationPattern = longArrayOf(0, 500, 300, 500, 300, 500)
                     setBypassDnd(true)
                     setShowBadge(true)
+                    enableLights(true)
                     lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                    // Use the alarm stream so the critical alert is loud where the OS permits it.
+                    val alarmUri = android.media.RingtoneManager
+                        .getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                        ?: android.media.RingtoneManager
+                            .getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                    val attrs = android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    setSound(alarmUri, attrs)
                 }
                 mgr.createNotificationChannel(critical)
             }

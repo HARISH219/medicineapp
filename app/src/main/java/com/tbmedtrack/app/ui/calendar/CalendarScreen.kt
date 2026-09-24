@@ -28,6 +28,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,7 +40,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.tbmedtrack.app.data.model.DayAdherence
 import com.tbmedtrack.app.ui.components.SectionCard
-import com.tbmedtrack.app.ui.history.DayHistoryContent
 import com.tbmedtrack.app.ui.theme.StatusMissed
 import com.tbmedtrack.app.ui.theme.StatusNeutral
 import com.tbmedtrack.app.ui.theme.StatusTaken
@@ -52,6 +52,9 @@ fun CalendarScreen(vm: CalendarViewModel = viewModel()) {
     val state by vm.state.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { vm.load() }
     val sheetState = rememberModalBottomSheetState()
+    var confirmTarget by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<com.tbmedtrack.app.data.model.DoseEvent?>(null)
+    }
 
     Column(Modifier.fillMaxWidth().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -81,13 +84,25 @@ fun CalendarScreen(vm: CalendarViewModel = viewModel()) {
             onDismissRequest = { vm.clearSelection() },
             sheetState = sheetState
         ) {
-            DayHistoryContent(
+            com.tbmedtrack.app.ui.history.DayHistoryContent(
                 epochDay = state.selectedDay!!,
                 events = state.selectedEvents,
-                modifier = Modifier.padding(horizontal = 16.dp)
+                modifier = Modifier.padding(horizontal = 16.dp),
+                onMarkPastTaken = { event -> confirmTarget = event }
             )
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    confirmTarget?.let { event ->
+        com.tbmedtrack.app.ui.history.PastDoseConfirmDialog(
+            event = event,
+            onDismiss = { confirmTarget = null },
+            onConfirm = { actualTakenAt ->
+                vm.markPastTaken(event.epochDay, event.timeMinutes, actualTakenAt)
+                confirmTarget = null
+            }
+        )
     }
 }
 

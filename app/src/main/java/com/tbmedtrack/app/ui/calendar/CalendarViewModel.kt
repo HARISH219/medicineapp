@@ -60,4 +60,18 @@ class CalendarViewModel(app: Application) : AndroidViewModel(app) {
     fun clearSelection() {
         _state.value = _state.value.copy(selectedDay = null, selectedEvents = emptyList())
     }
+
+    /**
+     * Record a past dose event as taken from the calendar day sheet. [actualTakenAt] is optional
+     * (null = exact time unknown). Does not re-arm alarms. Refreshes the sheet + month summaries.
+     */
+    fun markPastTaken(epochDay: Long, timeMinutes: Int, actualTakenAt: Long?) {
+        viewModelScope.launch {
+            repo.markPastDoseTaken(epochDay, timeMinutes, actualTakenAt)
+            ServiceLocator.syncManager(getApplication()).queue()
+            com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
+            selectDay(epochDay)
+            load(_state.value.yearMonth)
+        }
+    }
 }

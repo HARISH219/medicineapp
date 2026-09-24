@@ -148,6 +148,7 @@ class MedRepository(
                     historical = existing?.historical ?: false,
                     takenTimePrecision = existing?.takenTimePrecision
                         ?: com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT,
+                    recordedLater = existing?.recordedLater ?: false,
                     tabletsScheduled = tablets,
                     phaseName = phaseName,
                     treatmentDay = eval?.treatmentDay ?: 0,
@@ -277,13 +278,58 @@ class MedRepository(
     /** Persist a taken record for a single dose, creating the row if needed. */
     suspend fun markTaken(dose: ScheduledDose, takenAt: Long = System.currentTimeMillis()) {
         val existing = logDao.findLog(dose.medicineId, dose.scheduleId, dose.scheduledMillis)
+        val now = System.currentTimeMillis()
         writeEvent(
             (existing ?: logRow(dose, DoseStatus.TAKEN, takenAt))
-                .copy(status = DoseStatus.TAKEN, actualTakenDateTime = takenAt),
+                .copy(status = DoseStatus.TAKEN, actualTakenDateTime = takenAt, recordedAt = now),
             action = com.tbmedtrack.app.data.db.AuditAction.MARK_TAKEN,
             operationType = com.tbmedtrack.app.data.db.OperationType.MEDICATION_TAKEN,
             oldStatus = existing?.status ?: DoseStatus.SCHEDULED
         )
+    }
+
+    /**
+     * Record a PAST scheduled dose as taken ("back-fill" / correction). Unlike [markTaken] for
+     * today, this:
+     *  - stores scheduled_at, taken_at and recorded_at SEPARATELY (never assumes the dose was
+     *    taken at its scheduled time),
+     *  - marks [MedicationLog.recordedLater] = true so history can show "Added later",
+     *  - accepts an OPTIONAL [actualTakenAt]; when null the time is treated as UNKNOWN
+     *    (actualTakenDateTime stays null, takenTimePrecision = UNKNOWN),
+     *  - writes a MARK_TAKEN_LATE audit entry and enqueues a MEDICATION_TAKEN_LATE sync op,
+     *  - does NOT schedule or re-arm any alarms (past dates never generate reminders).
+     *
+     * Marks every dose sharing [timeMinutes] on [epochDay].
+     */
+    suspend fun markPastDoseTaken(
+        epochDay: Long,
+        timeMinutes: Int,
+        actualTakenAt: Long? = null
+    ) {
+        val date = LocalDate.ofEpochDay(epochDay)
+        val doses = getDosesForDay(date).filter { it.timeMinutes == timeMinutes }
+        val now = System.currentTimeMillis()
+        val precision = if (actualTakenAt == null)
+            com.tbmedtrack.app.data.db.TakenTimePrecision.UNKNOWN
+        else com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT
+        for (dose in doses) {
+            if (dose.status == DoseStatus.TAKEN) continue
+            val existing = logDao.findLog(dose.medicineId, dose.scheduleId, dose.scheduledMillis)
+            writeEvent(
+                (existing ?: logRow(dose, DoseStatus.TAKEN, actualTakenAt)).copy(
+                    status = DoseStatus.TAKEN,
+                    actualTakenDateTime = actualTakenAt,
+                    takenTimePrecision = precision,
+                    recordedAt = now,
+                    recordedLater = true
+                ),
+                action = com.tbmedtrack.app.data.db.AuditAction.MARK_TAKEN_LATE,
+                operationType = com.tbmedtrack.app.data.db.OperationType.MEDICATION_TAKEN_LATE,
+                oldStatus = existing?.status ?: DoseStatus.SCHEDULED
+            )
+        }
+        // Deliberately NOT calling any alarm scheduler here: back-filling a past dose must
+        // never (re)arm reminders. Only today/future schedules generate alarms.
     }
 
     suspend fun markStatus(dose: ScheduledDose, status: DoseStatus) {

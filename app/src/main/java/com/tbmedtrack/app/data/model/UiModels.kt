@@ -20,6 +20,8 @@ data class ScheduledDose(
     val logId: Long?,
     val historical: Boolean = false,
     val takenTimePrecision: String = com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT,
+    /** true if recorded after its scheduled day/window ("Added later") */
+    val recordedLater: Boolean = false,
     /** exact tablet count scheduled today (from ScheduleEngine); 0 if not tablet-based */
     val tabletsScheduled: Int = 0,
     /** phase name active today, e.g. "Phase 1"; blank if the medicine isn't phased */
@@ -49,6 +51,35 @@ fun ScheduledDose.presentation(nowMillis: Long = System.currentTimeMillis()): Pr
         DoseStatus.SCHEDULED ->
             if (nowMillis >= scheduledMillis) PresentationStatus.PENDING
             else PresentationStatus.UPCOMING
+    }
+
+/**
+ * Clear, user-facing history status for a dose:
+ *  - TAKEN         : recorded on time (same day, on/around schedule)
+ *  - TAKEN_LATE    : taken and recorded, but the recorded take time is well after schedule
+ *  - ADDED_LATER   : back-filled after the day (recorded_later); actual time may be unknown
+ *  - NOT_RECORDED  : scheduled but never recorded (past/pending) — never silently "missed"
+ *  - UPCOMING      : scheduled later today / future
+ *  - SNOOZED       : snoozed
+ */
+enum class HistoryStatus { TAKEN, TAKEN_LATE, ADDED_LATER, NOT_RECORDED, UPCOMING, SNOOZED }
+
+/** Minutes after the scheduled time beyond which a recorded take counts as "late". */
+private const val LATE_THRESHOLD_MIN = 60
+
+/** Derive the history status shown in History/Calendar for a dose. */
+fun ScheduledDose.historyStatus(nowMillis: Long = System.currentTimeMillis()): HistoryStatus =
+    when (status) {
+        DoseStatus.TAKEN -> when {
+            recordedLater || historical -> HistoryStatus.ADDED_LATER
+            takenAtMillis != null &&
+                takenAtMillis - scheduledMillis > LATE_THRESHOLD_MIN * 60_000L -> HistoryStatus.TAKEN_LATE
+            else -> HistoryStatus.TAKEN
+        }
+        DoseStatus.SNOOZED -> HistoryStatus.SNOOZED
+        DoseStatus.MISSED, DoseStatus.SKIPPED, DoseStatus.REVERTED -> HistoryStatus.NOT_RECORDED
+        DoseStatus.SCHEDULED ->
+            if (nowMillis >= scheduledMillis) HistoryStatus.NOT_RECORDED else HistoryStatus.UPCOMING
     }
 
 /** All doses that share the same clock time on a day, grouped into one dose event. */

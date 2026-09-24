@@ -52,6 +52,17 @@ data class MedicationLog(
      * approximate time), or UNKNOWN (taken that day but time not recorded — do not invent one).
      */
     val takenTimePrecision: String = TakenTimePrecision.EXACT,
+    /**
+     * Epoch millis when the user actually pressed "record" (distinct from scheduledDateTime and
+     * actualTakenDateTime). For a same-day live "taken" this equals the take time; for a
+     * back-filled past dose it is the (later) moment the correction was entered.
+     */
+    val recordedAt: Long? = null,
+    /**
+     * True when this event was recorded AFTER its scheduled day/window as a correction
+     * ("Added later"). Never assume a back-filled dose was taken at its scheduled time.
+     */
+    val recordedLater: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val deletedAt: Long? = null,

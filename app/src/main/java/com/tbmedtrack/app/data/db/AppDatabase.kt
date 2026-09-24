@@ -11,7 +11,7 @@ import androidx.room.TypeConverters
         Medicine::class, DoseSchedule::class, MedicationLog::class, Device::class,
         MedicationEventAudit::class, SyncOperation::class, MedicationPhase::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
