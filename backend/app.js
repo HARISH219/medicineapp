@@ -30,11 +30,8 @@ if (!TURSO_DATABASE_URL || !TURSO_AUTH_TOKEN) {
 
 const db = createClient({ url: TURSO_DATABASE_URL, authToken: TURSO_AUTH_TOKEN });
 
-// Idempotent, run-once schema self-heal. The sync-version tracking (migration 006) adds a
-// `last_synced_version` column to `devices`; if the live DB predates it, several endpoints
-// error with "no such column: last_synced_version". Rather than require a manual migrate.js
-// run after deploy, we add the column lazily on the first DB-touching request and tolerate
-// "duplicate column" so it is safe to call repeatedly / concurrently.
+// Idempotent, run-once schema self-heal. This keeps older live Turso databases compatible
+// after deployment even if migrate.js was not run separately.
 let schemaReady = null;
 function ensureSchema() {
   if (schemaReady) return schemaReady;
@@ -43,14 +40,39 @@ function ensureSchema() {
       await db.execute("ALTER TABLE devices ADD COLUMN last_synced_version INTEGER NOT NULL DEFAULT 0");
     } catch (e) {
       const msg = String((e && e.message) || "").toLowerCase();
-      // Column already exists (normal steady state) — not an error.
-      if (!msg.includes("duplicate column") && !msg.includes("already exists")) {
-        // Any other failure: don't cache a bad result, allow a retry next request.
-        schemaReady = null;
-        throw e;
-      }
+      if (!msg.includes("duplicate column") && !msg.includes("already exists")) throw e;
     }
-  })();
+    await db.batch([
+      {
+        sql: `CREATE TABLE IF NOT EXISTS monitor_doses (
+          occurrence_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, medicine_name TEXT NOT NULL,
+          dose_text TEXT NOT NULL, scheduled_at INTEGER NOT NULL, scheduled_epoch_day INTEGER NOT NULL,
+          status TEXT NOT NULL, taken_at INTEGER, eligible_at INTEGER NOT NULL,
+          critical_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        )`,
+        args: [],
+      },
+      {
+        sql: `CREATE TABLE IF NOT EXISTS monitor_food_events (
+          uuid TEXT PRIMARY KEY, user_id TEXT NOT NULL, food_at INTEGER NOT NULL,
+          recorded_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        )`,
+        args: [],
+      },
+      {
+        sql: `CREATE TABLE IF NOT EXISTS monitor_snapshot_meta (
+          user_id TEXT PRIMARY KEY, version INTEGER NOT NULL,
+          emergency_contact TEXT NOT NULL DEFAULT ''
+        )`,
+        args: [],
+      },
+      { sql: "CREATE INDEX IF NOT EXISTS idx_monitor_doses_user_day ON monitor_doses(user_id, scheduled_epoch_day)", args: [] },
+      { sql: "CREATE INDEX IF NOT EXISTS idx_monitor_food_user_time ON monitor_food_events(user_id, food_at)", args: [] },
+    ]);
+  })().catch((e) => {
+    schemaReady = null;
+    throw e;
+  });
   return schemaReady;
 }
 
@@ -86,22 +108,27 @@ function randomCode() {
 function newToken() {
   return crypto.randomBytes(32).toString("hex");
 }
+function asyncRoute(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
 
 // --- auth middleware: Bearer <deviceSessionToken> ---
-async function auth(req, res, next) {
-  // Guarantee the sync-version column exists before any device query runs (self-heal).
-  await ensureSchema().catch(() => {});
-  const header = req.headers["authorization"] || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: "missing token" });
-  const row = await db.execute({
-    sql: "SELECT device_id, user_id, revoked FROM devices WHERE session_token = ? LIMIT 1",
-    args: [hash(token)],
-  });
-  const device = row.rows[0];
-  if (!device || device.revoked) return res.status(401).json({ error: "invalid or revoked" });
-  req.device = device;
-  next();
+function auth(req, res, next) {
+  Promise.resolve().then(async () => {
+    // Guarantee schema compatibility before any authenticated device query runs.
+    await ensureSchema();
+    const header = req.headers["authorization"] || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ error: "missing token" });
+    const row = await db.execute({
+      sql: "SELECT device_id, user_id, role, revoked FROM devices WHERE session_token = ? LIMIT 1",
+      args: [hash(token)],
+    });
+    const device = row.rows[0];
+    if (!device || device.revoked) return res.status(401).json({ error: "invalid or revoked" });
+    req.device = device;
+    next();
+  }).catch(next);
 }
 
 // Root page — a small HTML landing page (dark navy, matches the app) confirming the backend
@@ -115,7 +142,7 @@ app.get("/status", (_req, res) =>
   res.json({
     service: "TB MedTrack sync backend",
     status: "ok",
-    endpoints: ["/health", "/status", "/stats", "/system", "/v1/public-stats", "/v1/system-status", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
+    endpoints: ["/health", "/status", "/stats", "/system", "/devices", "/v1/public-stats", "/v1/system-status", "/v1/system-revoke", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
   })
 );
 
@@ -206,6 +233,33 @@ app.get("/system", (_req, res) => {
   res.set("Content-Type", "text/html; charset=utf-8").send(systemHtml());
 });
 
+// The web "Devices & Sync" management page (HTML, light theme). Fetches /v1/system-status
+// client-side and can remove monitoring devices via /v1/system-revoke. Key-gated in the page.
+app.get("/devices", (_req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8").send(devicesHtml());
+});
+
+// Remove (revoke) a device from the web dashboard. Key-gated like the other dashboard
+// endpoints. Refuses to revoke a PRIMARY device so the account can never be locked out here.
+app.post("/v1/system-revoke", asyncRoute(async (req, res) => {
+  if (!statsKeyOk(req)) return res.status(403).json({ error: "forbidden" });
+  await ensureSchema().catch(() => {});
+  const deviceId = String((req.body && req.body.deviceId) || "");
+  if (!deviceId) return res.status(400).json({ error: "deviceId required" });
+  const row = await db.execute({
+    sql: "SELECT device_id, role FROM devices WHERE device_id = ? AND revoked = 0 LIMIT 1",
+    args: [deviceId],
+  });
+  const dev = row.rows[0];
+  if (!dev) return res.status(404).json({ error: "device not found" });
+  if (dev.role === "PRIMARY") return res.status(400).json({ error: "cannot remove the primary device" });
+  await db.execute({
+    sql: "UPDATE devices SET revoked = 1, session_token = NULL WHERE device_id = ?",
+    args: [deviceId],
+  });
+  res.json({ ok: true });
+}));
+
 // Detailed system + sync health: checklist, per-device table, sync overview, recent event log.
 // Gated by STATS_KEY like the other dashboard endpoints.
 app.get("/v1/system-status", async (req, res) => {
@@ -228,7 +282,10 @@ app.get("/v1/system-status", async (req, res) => {
   try {
     const t0 = Date.now();
     const [verRow, devRows, evRows] = await Promise.all([
-      db.execute("SELECT COALESCE(MAX(updated_at),0) AS v FROM medication_events"),
+      db.execute(`SELECT MAX(
+        COALESCE((SELECT MAX(updated_at) FROM medication_events),0),
+        COALESCE((SELECT MAX(version) FROM monitor_snapshot_meta),0)
+      ) AS v`),
       db.execute(
         "SELECT device_id, name, role, revoked, last_active_at, created_at, COALESCE(last_synced_version,0) AS lsv " +
           "FROM devices WHERE revoked = 0 ORDER BY role DESC, created_at ASC"
@@ -367,7 +424,8 @@ app.post("/v1/bootstrap", async (req, res) => {
 });
 
 // Primary device creates a short-lived pairing code.
-app.post("/v1/devices/auth-code", auth, async (req, res) => {
+app.post("/v1/devices/auth-code", auth, asyncRoute(async (req, res) => {
+  if (req.device.role !== "PRIMARY") return res.status(403).json({ error: "primary device required" });
   const code = randomCode();
   const expiresAt = Date.now() + 5 * 60 * 1000;
   await db.execute({
@@ -375,10 +433,10 @@ app.post("/v1/devices/auth-code", auth, async (req, res) => {
     args: [code, req.device.user_id, expiresAt, Date.now()],
   });
   res.json({ code, expiresAt });
-});
+}));
 
 // New device redeems a code -> becomes a MONITOR, gets a session token.
-app.post("/v1/devices/redeem", async (req, res) => {
+app.post("/v1/devices/redeem", asyncRoute(async (req, res) => {
   const { code, deviceName } = req.body || {};
   const row = await db.execute({
     sql: "SELECT * FROM auth_codes WHERE code = ? AND used = 0 AND expires_at > ? LIMIT 1",
@@ -396,31 +454,129 @@ app.post("/v1/devices/redeem", async (req, res) => {
     { sql: "UPDATE auth_codes SET used = 1 WHERE code = ?", args: [code] },
   ]);
   res.json({ sessionToken: token, deviceId });
-});
+}));
 
 // Primary device revokes another device.
-app.post("/v1/devices/revoke", auth, async (req, res) => {
+app.post("/v1/devices/revoke", auth, asyncRoute(async (req, res) => {
+  if (req.device.role !== "PRIMARY") return res.status(403).json({ error: "primary device required" });
   const { deviceId } = req.body || {};
+  if (deviceId === req.device.device_id) return res.status(400).json({ error: "cannot revoke this primary device" });
   await db.execute({
     sql: "UPDATE devices SET revoked = 1, session_token = NULL WHERE device_id = ? AND user_id = ?",
     args: [deviceId, req.device.user_id],
   });
   res.json({ ok: true });
-});
+}));
 
 // Register this device's FCM token.
-app.post("/v1/devices/fcm-token", auth, async (req, res) => {
+app.post("/v1/devices/fcm-token", auth, asyncRoute(async (req, res) => {
   const { fcmToken } = req.body || {};
   await db.execute({
     sql: "UPDATE devices SET fcm_token = ? WHERE device_id = ?",
     args: [fcmToken || null, req.device.device_id],
   });
   res.json({ ok: true });
-});
+}));
+
+// Primary publishes a bounded, concrete read-only snapshot for monitor devices. The monitor
+// never invents recurrence rules; it renders these materialized occurrences and food events.
+app.post("/v1/monitor-snapshot", auth, asyncRoute(async (req, res) => {
+  if (req.device.role !== "PRIMARY") return res.status(403).json({ error: "primary device required" });
+  await ensureSchema();
+  const doses = Array.isArray(req.body?.doses) ? req.body.doses.slice(0, 2000) : [];
+  const foodEvents = Array.isArray(req.body?.foodEvents) ? req.body.foodEvents.slice(0, 500) : [];
+  const emergencyContact = String(req.body?.emergencyContact || "").slice(0, 64);
+  const now = Date.now();
+  const statements = [
+    { sql: "DELETE FROM monitor_doses WHERE user_id = ?", args: [req.device.user_id] },
+    { sql: "DELETE FROM monitor_food_events WHERE user_id = ?", args: [req.device.user_id] },
+    {
+      sql: `INSERT INTO monitor_snapshot_meta (user_id,version,emergency_contact) VALUES (?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET version=excluded.version,
+              emergency_contact=excluded.emergency_contact`,
+      args: [req.device.user_id, now, emergencyContact],
+    },
+    {
+      sql: "UPDATE devices SET last_synced_version = MAX(last_synced_version, ?), last_active_at = ? WHERE device_id = ?",
+      args: [now, now, req.device.device_id],
+    },
+  ];
+  for (const d of doses) {
+    if (!d.occurrenceId || !Number.isFinite(Number(d.scheduledAt))) continue;
+    statements.push({
+      sql: `INSERT INTO monitor_doses
+        (occurrence_id,user_id,medicine_name,dose_text,scheduled_at,scheduled_epoch_day,status,
+         taken_at,eligible_at,critical_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      args: [
+        String(d.occurrenceId), req.device.user_id, String(d.medicineName || "Medicine"),
+        String(d.doseText || ""), Number(d.scheduledAt), Number(d.scheduledEpochDay || 0),
+        String(d.status || "SCHEDULED"), d.takenAt == null ? null : Number(d.takenAt),
+        Number(d.eligibleAt || d.scheduledAt), Number(d.criticalAt || d.scheduledAt), now,
+      ],
+    });
+  }
+  for (const f of foodEvents) {
+    if (!f.uuid || !Number.isFinite(Number(f.foodAt))) continue;
+    statements.push({
+      sql: `INSERT INTO monitor_food_events (uuid,user_id,food_at,recorded_at,updated_at)
+            VALUES (?,?,?,?,?)`,
+      args: [String(f.uuid), req.device.user_id, Number(f.foodAt), Number(f.recordedAt || f.foodAt), now],
+    });
+  }
+  await db.batch(statements);
+  res.json({ version: now, doses: doses.length, foodEvents: foodEvents.length });
+}));
+
+// Any authorized device may download the read-only monitor projection for its account.
+app.get("/v1/monitor-snapshot", auth, asyncRoute(async (req, res) => {
+  await ensureSchema();
+  const [doseRows, foodRows, metaRows] = await Promise.all([
+    db.execute({
+      sql: `SELECT occurrence_id,medicine_name,dose_text,scheduled_at,scheduled_epoch_day,status,
+                   taken_at,eligible_at,critical_at,updated_at
+            FROM monitor_doses WHERE user_id = ? ORDER BY scheduled_at ASC`,
+      args: [req.device.user_id],
+    }),
+    db.execute({
+      sql: `SELECT uuid,food_at,recorded_at,updated_at FROM monitor_food_events
+            WHERE user_id = ? ORDER BY food_at DESC`,
+      args: [req.device.user_id],
+    }),
+    db.execute({
+      sql: "SELECT version, emergency_contact FROM monitor_snapshot_meta WHERE user_id = ? LIMIT 1",
+      args: [req.device.user_id],
+    }),
+  ]);
+  const doses = doseRows.rows.map((d) => ({
+    occurrenceId: d.occurrence_id,
+    medicineName: d.medicine_name,
+    doseText: d.dose_text,
+    scheduledAt: Number(d.scheduled_at),
+    scheduledEpochDay: Number(d.scheduled_epoch_day),
+    status: d.status,
+    takenAt: d.taken_at == null ? null : Number(d.taken_at),
+    eligibleAt: Number(d.eligible_at),
+    criticalAt: Number(d.critical_at),
+  }));
+  const foodEvents = foodRows.rows.map((f) => ({
+    uuid: f.uuid,
+    foodAt: Number(f.food_at),
+    recordedAt: Number(f.recorded_at),
+  }));
+  const version = Number(metaRows.rows[0]?.version || 0);
+  const emergencyContact = String(metaRows.rows[0]?.emergency_contact || "");
+  // A monitor that successfully received this primary-authored snapshot is active and has
+  // observed all medication events represented by it. Keep device status/version consistent.
+  await db.execute({
+    sql: "UPDATE devices SET last_synced_version = MAX(last_synced_version, ?), last_active_at = ? WHERE device_id = ?",
+    args: [version, Date.now(), req.device.device_id],
+  });
+  res.json({ version, doses, foodEvents, emergencyContact });
+}));
 
 // Pull events updated since a watermark. Records this device's sync watermark so we can later
 // tell whether each device (including monitors) has received the latest cloud version.
-app.get("/v1/events", auth, async (req, res) => {
+app.get("/v1/events", auth, asyncRoute(async (req, res) => {
   const since = Number(req.query.since || 0);
   const rows = await db.execute({
     sql: "SELECT * FROM medication_events WHERE user_id = ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1000",
@@ -436,15 +592,18 @@ app.get("/v1/events", auth, async (req, res) => {
     })
     .catch(() => {});
   res.json({ events });
-});
+}));
 
 // Report the synchronization version for this account: the cloud's latest version and each
 // authorized device's acknowledged version, so the app can verify monitors actually received it.
-app.get("/v1/sync-status", auth, async (req, res) => {
+app.get("/v1/sync-status", auth, asyncRoute(async (req, res) => {
   const userId = req.device.user_id;
   const verRow = await db.execute({
-    sql: "SELECT COALESCE(MAX(updated_at),0) AS v FROM medication_events WHERE user_id = ?",
-    args: [userId],
+    sql: `SELECT MAX(
+            COALESCE((SELECT MAX(updated_at) FROM medication_events WHERE user_id = ?), 0),
+            COALESCE((SELECT version FROM monitor_snapshot_meta WHERE user_id = ?), 0)
+          ) AS v`,
+    args: [userId, userId],
   });
   const cloudVersion = Number(verRow.rows[0]?.v || 0);
   const devRows = await db.execute({
@@ -466,10 +625,11 @@ app.get("/v1/sync-status", auth, async (req, res) => {
     isThisDevice: d.device_id === req.device.device_id,
   }));
   res.json({ cloudVersion, devices });
-});
+}));
 
 // Upload events. Idempotent upsert by uuid with TAKEN/REVERTED merge.
-app.post("/v1/events", auth, async (req, res) => {
+app.post("/v1/events", auth, asyncRoute(async (req, res) => {
+  if (req.device.role !== "PRIMARY") return res.status(403).json({ error: "monitor devices are read-only" });
   const events = (req.body && req.body.events) || [];
   const accepted = [];
   for (const e of events) {
@@ -485,7 +645,7 @@ app.post("/v1/events", auth, async (req, res) => {
     accepted.push(e.uuid);
   }
   res.json({ accepted });
-});
+}));
 
 function shouldReplace(existing, incoming) {
   if (incoming.updatedAt > existing.updated_at) return true;
@@ -539,6 +699,12 @@ function toDto(r) {
   };
 }
 
+// JSON error boundary for async API handlers; prevents rejected DB promises from hanging.
+app.use((err, _req, res, _next) => {
+  console.error("API error:", err && err.message);
+  if (!res.headersSent) res.status(500).json({ error: "internal server error" });
+});
+
 // --- HTML pages (dark navy + orange, matching the app; zero external dependencies) ---
 
 const BASE_CSS = `
@@ -586,9 +752,10 @@ function landingHtml() {
   <div class="card">
     <p class="muted" style="margin-top:0">This is the private sync backend for the TB MedTrack app. It stores medication
     events and lets your authorized devices stay in sync. There is nothing to do here.</p>
-    <a class="btn" href="/stats">📊 Open stats dashboard</a>
+    <a class="btn" href="/devices">🖥 Devices &amp; Sync</a>
+    <a class="btn" href="/stats" style="background:#334155;margin-left:8px">📊 Stats dashboard</a>
     <a class="btn" href="/system" style="background:#334155;margin-left:8px">🩺 System / sync status</a>
-    <p class="muted" style="font-size:13px">Both dashboards require an access key.</p>
+    <p class="muted" style="font-size:13px">All dashboards require an access key.</p>
   </div>
   <div class="card">
     <b>Endpoints</b>
@@ -596,6 +763,7 @@ function landingHtml() {
     <div class="row"><span>Status (JSON)</span><span class="muted">/status</span></div>
     <div class="row"><span>Stats dashboard</span><span class="muted">/stats?key=…</span></div>
     <div class="row"><span>System / sync health</span><span class="muted">/system?key=…</span></div>
+    <div class="row"><span>Devices &amp; Sync</span><span class="muted">/devices?key=…</span></div>
     <div class="row"><span>Device sync API</span><span class="muted">/v1/*</span></div>
   </div>
   <div class="foot">Made with ❤️ by Harish · TB MedTrack</div>
@@ -817,6 +985,618 @@ function systemHtml() {
   }
   if(!key){ document.getElementById("gate").style.display="block"; document.getElementById("sub").textContent="Private console"; }
   else { load(); setInterval(load, 15000); }
+</script>
+</body></html>`;
+}
+
+// --- "Devices & Sync" management dashboard (light theme, fully responsive) ---
+// Self-contained light theme per the product design (white bg, purple accent). It reuses the
+// existing /v1/system-status data and removes devices via /v1/system-revoke.
+function devicesHtml() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MedTrack — Devices & Sync</title>
+<style>
+  :root{
+    --bg:#F4F5F9;--surface:#FFFFFF;--line:#E7E9F2;--line2:#EEF0F7;
+    --text:#1E2233;--text2:#5A6072;--muted:#8A90A2;
+    --purple:#6D4AFF;--purple-ink:#5A38F0;--purple-soft:#F1EEFF;
+    --green:#16A34A;--green-soft:#E7F6EC;
+    --amber:#D97706;--amber-soft:#FEF3E2;
+    --red:#DC2626;--red-soft:#FCEBEB;--gray:#9AA0AE;
+    --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.05);
+    --shadow-lg:0 8px 24px rgba(16,24,40,.10);--radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.45}
+  .app{display:flex;min-height:100vh}
+  a{color:inherit;text-decoration:none}
+  button{font-family:inherit;cursor:pointer;border:none;background:none}
+
+  /* Sidebar */
+  .sidebar{width:248px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;padding:18px 14px;position:sticky;top:0;height:100vh}
+  .logo{display:flex;align-items:center;gap:10px;padding:6px 8px 18px;font-weight:800;font-size:18px}
+  .logo .mark{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#7C5CFF,#6D4AFF);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px}
+  .nav{display:flex;flex-direction:column;gap:2px;flex:1}
+  .nav a{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;
+    color:var(--text2);font-weight:500}
+  .nav a .ic{width:18px;text-align:center;opacity:.9}
+  .nav a:hover{background:var(--bg)}
+  .nav a.active{background:var(--purple-soft);color:var(--purple-ink);font-weight:600}
+  .side-foot{display:flex;align-items:center;gap:10px;padding:10px 8px;border-top:1px solid var(--line);margin-top:8px}
+  .avatar{width:32px;height:32px;border-radius:50%;background:var(--purple);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:700}
+  .side-foot .nm{font-weight:600;font-size:13px}.side-foot .em{color:var(--muted);font-size:12px}
+
+  /* Main */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .content{padding:24px 28px 64px;max-width:1080px;width:100%;margin:0 auto}
+
+  /* Topbar (mobile) */
+  .topbar{display:none;align-items:center;justify-content:space-between;padding:12px 16px;
+    background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30}
+  .topbar .brand{display:flex;align-items:center;gap:8px;font-weight:800}
+  .iconbtn{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+    color:var(--text2);font-size:18px}
+  .iconbtn:hover{background:var(--bg)}
+
+  /* Header */
+  .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+  .head h1{font-size:24px;margin:0 0 4px}
+  .head p{margin:0;color:var(--text2)}
+  .head .right{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+  .updated{color:var(--muted);font-size:12px;text-align:right}
+  .updated b{color:var(--text2);font-weight:600}
+
+  /* Buttons */
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:9px 16px;border-radius:10px;font-weight:600;font-size:14px;
+    transition:background .15s,box-shadow .15s,transform .05s;white-space:nowrap}
+  .btn:active{transform:translateY(1px)}
+  .btn-primary{background:var(--purple);color:#fff}
+  .btn-primary:hover{background:var(--purple-ink)}
+  .btn-ghost{background:var(--surface);border:1px solid var(--line);color:var(--text)}
+  .btn-ghost:hover{background:var(--bg)}
+  .btn-danger{background:var(--red);color:#fff}
+  .btn-danger:hover{background:#B91C1C}
+  .btn-sm{padding:6px 12px;font-size:13px}
+  .btn[disabled]{opacity:.6;cursor:default}
+
+  /* Cards */
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);padding:18px;margin-bottom:18px}
+  .card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
+  .card-title{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px}
+  .card-title .ic{color:var(--purple)}
+  .card-sub{color:var(--text2);font-size:13px;margin-top:2px;font-weight:400}
+
+  /* Status pill + dot */
+  .pill{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:13px}
+  .dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+  .dot.green{background:var(--green)}.dot.amber{background:var(--amber)}
+  .dot.red{background:var(--red)}.dot.gray{background:var(--gray)}
+  .t-green{color:var(--green)}.t-amber{color:var(--amber)}.t-red{color:var(--red)}.t-gray{color:var(--text2)}
+
+  /* Status sub-cards grid */
+  .subgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .subcard{border:1px solid var(--line2);border-radius:12px;padding:14px;background:#FCFCFE}
+  .subcard .lbl{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;margin-bottom:8px}
+  .subcard .lbl .ic{color:var(--purple)}
+  .subcard .val{font-weight:600;font-size:13px}
+  .subcard .meta{color:var(--muted);font-size:12px;margin-top:2px}
+  .overall-row{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+  .overall-row .lead{font-weight:700;font-size:15px}
+
+  /* Table (desktop) */
+  .tablewrap{overflow:visible}
+  table{width:100%;border-collapse:collapse}
+  thead th{text-align:left;padding:10px 12px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--muted);font-weight:700;border-bottom:1px solid var(--line)}
+  tbody td{padding:14px 12px;border-bottom:1px solid var(--line2);vertical-align:middle;font-size:13.5px}
+  tbody tr:last-child td{border-bottom:none}
+  .dev-name{display:flex;align-items:center;gap:10px}
+  .dev-ic{width:34px;height:34px;border-radius:9px;background:var(--purple-soft);color:var(--purple-ink);
+    display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+  .dev-name .nm{font-weight:700}.dev-name .sub{color:var(--muted);font-size:12px}
+  .role{font-weight:700;font-size:12px;letter-spacing:.02em}
+  .role .sub{display:block;color:var(--muted);font-weight:400;font-size:12px;letter-spacing:0}
+  .badge{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11.5px;font-weight:600}
+  .badge.green{background:var(--green-soft);color:var(--green)}
+  .badge.purple{background:var(--purple-soft);color:var(--purple-ink)}
+  .badge.amber{background:var(--amber-soft);color:var(--amber)}
+  .cellstack .top{font-weight:600}.cellstack .bot{color:var(--muted);font-size:12px}
+  .actions{display:flex;gap:8px;justify-content:flex-end;align-items:center}
+  .thisdev{color:var(--muted);font-size:12.5px;font-style:normal}
+
+  /* Sync info two-column */
+  .sync-cols{display:grid;grid-template-columns:1.3fr 1fr;gap:18px}
+  .kv{border:1px solid var(--line2);border-radius:12px;overflow:hidden}
+  .kv .row{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line2)}
+  .kv .row:last-child{border-bottom:none}
+  .kv .k{display:flex;align-items:center;gap:9px;color:var(--text2)}
+  .kv .k .ic{color:var(--purple);width:16px;text-align:center}
+  .kv .v{font-weight:700}
+  .noticestack{display:flex;flex-direction:column;gap:12px}
+  .notice{border-radius:12px;padding:14px;display:flex;gap:12px;align-items:flex-start}
+  .notice .ic{font-size:16px;line-height:1.2;margin-top:1px}
+  .notice.green{background:var(--green-soft)}
+  .notice.info{background:var(--purple-soft)}
+  .notice .h{font-weight:700;margin-bottom:2px}
+  .notice.green .h{color:var(--green)}
+  .notice p{margin:0;color:var(--text2);font-size:13px}
+
+  /* Check-sync steps */
+  .steps{list-style:none;padding:0;margin:10px 0 0}
+  .steps li{padding:7px 0;display:flex;gap:10px;align-items:center;font-size:13.5px;color:var(--text2)}
+  .steps li .mk{width:18px;text-align:center}
+
+  /* Modal */
+  .overlay{position:fixed;inset:0;background:rgba(20,22,34,.45);display:none;align-items:center;justify-content:center;
+    padding:20px;z-index:100}
+  .overlay.show{display:flex;animation:fade .12s ease}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .modal{background:var(--surface);border-radius:16px;max-width:420px;width:100%;padding:22px;box-shadow:var(--shadow-lg);
+    animation:pop .14s ease}
+  @keyframes pop{from{transform:translateY(8px);opacity:.6}to{transform:none;opacity:1}}
+  .modal .warn-ic{width:44px;height:44px;border-radius:50%;background:var(--red-soft);color:var(--red);
+    display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:12px}
+  .modal h3{margin:0 0 6px;font-size:18px}
+  .modal .dev{font-weight:700;margin-bottom:6px}
+  .modal p{margin:0 0 18px;color:var(--text2)}
+  .modal .row{display:flex;gap:10px;justify-content:flex-end}
+
+  /* Toast */
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;background:#12331F;color:#EAFBF0;
+    padding:11px 18px;border-radius:10px;font-weight:600;box-shadow:var(--shadow-lg);display:none;z-index:120}
+  .toast.show{display:block;animation:fade .12s ease}
+  .toast.err{background:#3A1414;color:#FDE8E8}
+
+  /* Gate */
+  .gate{max-width:400px;margin:60px auto;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius);box-shadow:var(--shadow);padding:24px}
+  .gate h2{margin:0 0 6px;font-size:18px}
+  .gate p{margin:0 0 16px;color:var(--text2)}
+  .gate input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:14px;margin-bottom:12px;color:var(--text)}
+  .gate .err{color:var(--red);font-size:13px;margin-top:10px;display:none}
+  .cards-mobile{display:none}
+  .muted{color:var(--muted)}
+  .scrim{display:none}
+
+  /* Tablet */
+  @media (max-width:1000px){
+    .sidebar{width:76px;padding:18px 8px}
+    .logo span,.nav a span,.side-foot .txt{display:none}
+    .logo{justify-content:center}.nav a{justify-content:center;padding:12px}
+    .side-foot{justify-content:center}
+    .subgrid{grid-template-columns:repeat(2,1fr)}
+    .sync-cols{grid-template-columns:1fr}
+  }
+
+  /* Mobile */
+  @media (max-width:720px){
+    .sidebar{position:fixed;left:0;top:0;width:264px;padding:18px 14px;z-index:60;transform:translateX(-100%);
+      transition:transform .2s ease;box-shadow:var(--shadow-lg)}
+    .sidebar.open{transform:none}
+    .logo span,.nav a span,.side-foot .txt{display:inline}
+    .logo{justify-content:flex-start}.nav a{justify-content:flex-start;padding:10px 12px}
+    .side-foot{justify-content:flex-start}
+    .scrim{position:fixed;inset:0;background:rgba(20,22,34,.4);z-index:55}
+    .scrim.show{display:block}
+    .topbar{display:flex}
+    .content{padding:16px 14px calc(72px + env(safe-area-inset-bottom))}
+    .head h1{font-size:20px}
+    .head .right{align-items:stretch;width:100%}
+    .head .right .btn{width:100%;justify-content:center}
+    .updated{text-align:left}
+    .subgrid{grid-template-columns:1fr}
+    .tablewrap table{display:none}
+    .cards-mobile{display:flex;flex-direction:column;gap:12px}
+  }
+</style></head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="logo"><span class="mark">✚</span><span>MedTrack</span></div>
+    <nav class="nav">
+      <a href="#"><span class="ic">▦</span><span>Dashboard</span></a>
+      <a href="#"><span class="ic">💊</span><span>Medications</span></a>
+      <a href="#"><span class="ic">🗓</span><span>Schedule</span></a>
+      <a href="#"><span class="ic">📅</span><span>Calendar</span></a>
+      <a href="#"><span class="ic">🕘</span><span>History</span></a>
+      <a href="#" class="active"><span class="ic">🖥</span><span>Devices &amp; Sync</span></a>
+      <a href="/system"><span class="ic">🩺</span><span>System Health</span></a>
+      <a href="#"><span class="ic">🔔</span><span>Notifications</span></a>
+      <a href="#"><span class="ic">📋</span><span>Audit Logs</span></a>
+      <a href="#"><span class="ic">⚙️</span><span>Settings</span></a>
+    </nav>
+    <div class="side-foot"><div class="avatar" id="ava">H</div><div class="txt"><div class="nm" id="uname">MedTrack</div><div class="em">Health account</div></div></div>
+  </aside>
+  <div class="scrim" id="scrim" onclick="toggleNav(false)"></div>
+
+  <div class="main">
+    <!-- Mobile topbar -->
+    <div class="topbar">
+      <button class="iconbtn" onclick="toggleNav(true)" aria-label="Open menu">☰</button>
+      <div class="brand"><span class="mark" style="width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,#7C5CFF,#6D4AFF);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px">✚</span>MedTrack</div>
+      <button class="iconbtn" aria-label="Notifications">🔔</button>
+    </div>
+
+    <div class="content">
+      <!-- Gate -->
+      <div id="gate" class="gate" style="display:none">
+        <h2>Enter access key</h2>
+        <p>This page is private. Enter your access key to manage devices and sync.</p>
+        <input id="key" type="password" placeholder="Access key" autocomplete="off" onkeydown="if(event.key==='Enter')go()">
+        <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="go()">View devices</button>
+        <div class="err" id="gateErr">Wrong key or dashboard disabled.</div>
+      </div>
+
+      <div id="dash" style="display:none">
+        <!-- Header -->
+        <div class="head">
+          <div>
+            <h1>Devices &amp; Sync</h1>
+            <p>Manage your authorized devices and monitor synchronization status.</p>
+          </div>
+          <div class="right">
+            <div class="updated">Last updated:<br><b id="lastUpdated">—</b></div>
+            <button class="btn btn-primary" id="checkBtn" onclick="checkSync()"><span id="checkIc">↻</span> Check Sync</button>
+          </div>
+        </div>
+
+        <!-- System status -->
+        <div class="card">
+          <div class="overall-row">
+            <span class="card-title"><span class="ic">☁️</span> Overall Sync Status</span>
+            <span class="pill" id="overallPill"><span class="dot gray"></span><span>Loading…</span></span>
+          </div>
+          <div class="subgrid">
+            <div class="subcard">
+              <div class="lbl"><span class="ic">☁️</span> Cloud Sync</div>
+              <div class="val pill" id="ssCloud"><span class="dot gray"></span> —</div>
+              <div class="meta" id="ssCloudMeta">—</div>
+            </div>
+            <div class="subcard">
+              <div class="lbl"><span class="ic">🌐</span> Vercel API</div>
+              <div class="val pill" id="ssApi"><span class="dot gray"></span> —</div>
+              <div class="meta" id="ssApiMeta">—</div>
+            </div>
+            <div class="subcard">
+              <div class="lbl"><span class="ic">🗄</span> Turso Database</div>
+              <div class="val pill" id="ssDb"><span class="dot gray"></span> —</div>
+              <div class="meta" id="ssDbMeta">—</div>
+            </div>
+            <div class="subcard">
+              <div class="lbl"><span class="ic">🕒</span> Pending Changes</div>
+              <div class="val" id="ssPending">0</div>
+              <div class="meta" id="ssPendingMeta">All up to date</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Connected devices -->
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title"><span class="ic">🖥</span> Connected Devices</div>
+              <div class="card-sub">Devices authorized to access your MedTrack data.</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="showAdd()">＋ Add Device</button>
+          </div>
+          <div class="tablewrap">
+            <table>
+              <thead><tr>
+                <th>Device</th><th>Role</th><th>Status</th><th>Last Seen</th><th>Last Sync</th><th>Version</th><th style="text-align:right">Actions</th>
+              </tr></thead>
+              <tbody id="devRows"></tbody>
+            </table>
+            <div class="cards-mobile" id="devCards"></div>
+          </div>
+        </div>
+
+        <!-- Sync information -->
+        <div class="card">
+          <div class="card-head"><div class="card-title"><span class="ic">🔄</span> Sync Information</div></div>
+          <div class="sync-cols">
+            <div class="kv">
+              <div class="row"><span class="k"><span class="ic">☁️</span> Cloud version</span><span class="v" id="siVer">#0</span></div>
+              <div class="row"><span class="k"><span class="ic">⬆️</span> Last upload</span><span class="v" id="siUp">—</span></div>
+              <div class="row"><span class="k"><span class="ic">⬇️</span> Last download</span><span class="v" id="siDown">—</span></div>
+              <div class="row"><span class="k"><span class="ic">🕒</span> Pending changes</span><span class="v" id="siPending">0</span></div>
+              <div class="row"><span class="k"><span class="ic">⚠️</span> Failed changes</span><span class="v" id="siFailed">0</span></div>
+              <div class="row"><span class="k"><span class="ic">🔁</span> Next automatic check</span><span class="v" id="siNext">—</span></div>
+            </div>
+            <div class="noticestack">
+              <div class="notice green">
+                <span class="ic">✓</span>
+                <div><div class="h" id="niState">Synced</div><p id="niStateSub">Your data is up to date across all devices.</p></div>
+              </div>
+              <div class="notice info">
+                <span class="ic">ℹ️</span>
+                <div><div class="h">Auto Sync is Always Active</div><p>Your data is automatically synchronized. No manual action is required. The monitoring device checks for updates every 10 minutes.</p></div>
+              </div>
+              <button class="btn btn-primary" style="justify-content:center" onclick="checkSync()">↻ Check Sync</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Authorization history -->
+        <div class="card">
+          <div class="card-head">
+            <div>
+              <div class="card-title"><span class="ic">🕓</span> Device Authorization History</div>
+              <div class="card-sub">Recent device authorizations for this account.</div>
+            </div>
+          </div>
+          <div class="tablewrap">
+            <table>
+              <thead><tr><th>Date &amp; Time</th><th>Device</th><th>Action</th><th>Details</th></tr></thead>
+              <tbody id="authRows"></tbody>
+            </table>
+            <div class="cards-mobile" id="authCards"></div>
+          </div>
+        </div>
+
+        <div class="muted" style="text-align:center;font-size:12px;margin-top:8px">Auto-refreshes every 30s · MedTrack</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Delete modal -->
+<div class="overlay" id="modal">
+  <div class="modal">
+    <div class="warn-ic">🗑</div>
+    <h3>Remove Monitoring Device?</h3>
+    <div class="dev" id="mDev">—</div>
+    <p>This device will no longer be authorized to access your MedTrack monitoring data.</p>
+    <div class="row">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" id="mConfirm" onclick="confirmRemove()">Remove Device</button>
+    </div>
+  </div>
+</div>
+
+<!-- Check-sync modal -->
+<div class="overlay" id="syncModal">
+  <div class="modal">
+    <h3 id="syncTitle">Checking…</h3>
+    <ul class="steps" id="syncSteps"></ul>
+    <div class="row" style="margin-top:16px"><button class="btn btn-ghost" id="syncClose" onclick="closeSync()" style="display:none">Close</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  var params = new URLSearchParams(location.search);
+  var KEY = params.get("key") || "";
+  var pendingRemoveId = null, latest = null;
+
+  function toggleNav(open){
+    document.getElementById("sidebar").classList.toggle("open", open);
+    document.getElementById("scrim").classList.toggle("show", open);
+  }
+  function go(){ var k=document.getElementById("key").value.trim(); if(k) location.search="?key="+encodeURIComponent(k); }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+
+  function fmtDateTime(ms){ if(!ms) return "—"; var d=new Date(ms);
+    return d.toLocaleDateString([], {month:"short",day:"2-digit",year:"numeric"})+", "+d.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+  function fmtTime(ms){ if(!ms) return "—"; return new Date(ms).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+  function isToday(ms){ if(!ms) return false; var d=new Date(ms), n=new Date();
+    return d.getDate()===n.getDate()&&d.getMonth()===n.getMonth()&&d.getFullYear()===n.getFullYear(); }
+  function seenLabel(ms){ if(!ms) return "—"; return (isToday(ms)?"Today":new Date(ms).toLocaleDateString([], {month:"short",day:"2-digit"}))+", "+fmtTime(ms); }
+
+  // Status: {cls,text} using dot color + text (never color alone).
+  function devStatus(d){
+    if(!d.online) return {cls:"gray",text:"Offline"};
+    if(!d.upToDate) return {cls:"amber",text:"Syncing"};
+    return {cls:"green",text:"Online"};
+  }
+  function verBadge(d){
+    if(d.upToDate) return '<span class="badge green">✓ Up to date</span>';
+    return '<span class="badge amber">Behind</span>';
+  }
+
+  function render(d){
+    latest = d;
+    document.getElementById("gate").style.display="none";
+    document.getElementById("dash").style.display="block";
+    document.getElementById("lastUpdated").textContent = fmtDateTime(d.generatedAt);
+
+    // find checks
+    function chk(name){ return (d.checks||[]).find(function(c){return c.name===name;}) || {status:"warn",detail:"—"}; }
+    var overallText = d.overall==="ok"?"Everything is synchronized":d.overall==="warn"?"Monitoring device is behind":"Sync error";
+    var overallCls = d.overall==="ok"?"green":d.overall==="warn"?"amber":"red";
+    setPill("overallPill", overallCls, overallText);
+
+    // Cloud sync
+    var cloud = chk("Cloud sync");
+    setPill("ssCloud", cloud.status==="ok"?"green":cloud.status==="warn"?"amber":"red", cloud.status==="ok"?"Active":cloud.status==="warn"?"Behind":"Error");
+    document.getElementById("ssCloudMeta").textContent = "Version #"+d.cloudVersion;
+    // API
+    var api = chk("Vercel API");
+    setPill("ssApi", api.status==="ok"?"green":"red", api.status==="ok"?"Online":"Error");
+    document.getElementById("ssApiMeta").textContent = "Responding";
+    // DB
+    var dbc = chk("Turso database"), lat = chk("Database latency");
+    setPill("ssDb", dbc.status==="ok"?"green":"red", dbc.status==="ok"?"Connected":"Error");
+    document.getElementById("ssDbMeta").textContent = d.latencyMs>=0? d.latencyMs+" ms" : "—";
+    // Pending
+    var pend = (d.devices||[]).reduce(function(a,b){return a+(b.pending||0);},0);
+    document.getElementById("ssPending").textContent = pend;
+    document.getElementById("ssPendingMeta").textContent = pend===0?"All up to date":"Awaiting sync";
+
+    renderDevices(d.devices||[]);
+    renderSyncInfo(d);
+    renderAuthHistory(d.devices||[]);
+  }
+
+  function setPill(id, cls, text){
+    var el=document.getElementById(id);
+    el.innerHTML = '<span class="dot '+cls+'"></span><span class="t-'+cls+'">'+esc(text)+'</span>';
+  }
+
+  function renderDevices(devs){
+    var tb=document.getElementById("devRows"), mc=document.getElementById("devCards");
+    tb.innerHTML=""; mc.innerHTML="";
+    if(!devs.length){ tb.innerHTML='<tr><td colspan="7" class="muted">No devices authorized yet.</td></tr>';
+      mc.innerHTML='<div class="muted">No devices authorized yet.</div>'; return; }
+
+    devs.forEach(function(dev){
+      var isPrimary = dev.role==="PRIMARY";
+      var st=devStatus(dev);
+      var roleLabel = isPrimary?"PRIMARY":"MONITORING";
+      var roleSub = isPrimary?"Main device":"Read only";
+      var thisBadge = dev.isThisDevice? '<span class="badge purple">This device</span>' : '';
+      var actions = isPrimary
+        ? '<span class="thisdev">This device</span>'
+        : '<button class="btn btn-ghost btn-sm" onclick="viewDevice(\\''+esc(dev.deviceId)+'\\')">View</button>'+
+          '<button class="btn btn-danger btn-sm" onclick="askRemove(\\''+esc(dev.deviceId)+'\\',\\''+esc(dev.name)+'\\')">Delete</button>';
+
+      var tr=document.createElement("tr");
+      tr.innerHTML=
+        '<td><div class="dev-name"><span class="dev-ic">'+(isPrimary?"📱":"👀")+'</span>'+
+          '<span><span class="nm">'+esc(dev.name)+'</span> '+thisBadge+'<br><span class="sub">'+(isPrimary?"My Phone":"Monitor")+'</span></span></div></td>'+
+        '<td><span class="role">'+roleLabel+'<span class="sub">'+roleSub+'</span></span></td>'+
+        '<td><span class="pill"><span class="dot '+st.cls+'"></span><span class="t-'+st.cls+'">'+st.text+'</span></span></td>'+
+        '<td class="cellstack"><div class="top">'+(isToday(dev.lastActiveAt)?"Today":new Date(dev.lastActiveAt||Date.now()).toLocaleDateString([], {month:"short",day:"2-digit"}))+'</div><div class="bot">'+fmtTime(dev.lastActiveAt||dev.createdAt)+'</div></td>'+
+        '<td class="cellstack"><div class="top">'+fmtTime(dev.lastActiveAt||dev.createdAt)+'</div></td>'+
+        '<td class="cellstack"><div class="top">#'+dev.lastSyncedVersion+'</div><div class="bot">'+verBadge(dev)+'</div></td>'+
+        '<td><div class="actions">'+actions+'</div></td>';
+      tb.appendChild(tr);
+
+      // Mobile card
+      var card=document.createElement("div"); card.className="card"; card.style.margin="0"; card.style.boxShadow="none"; card.style.border="1px solid var(--line)";
+      card.innerHTML=
+        '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">'+
+          '<div class="dev-name"><span class="dev-ic">'+(isPrimary?"📱":"👀")+'</span><span><span class="nm">'+esc(dev.name)+'</span> '+thisBadge+'<br><span class="sub">'+(isPrimary?"My Phone":"Monitor")+'</span></span></div>'+
+          '<div style="text-align:right"><span class="role">'+roleLabel+'<span class="sub">'+roleSub+'</span></span></div>'+
+        '</div>'+
+        '<div style="display:flex;justify-content:space-between;margin-top:12px">'+
+          '<span class="pill"><span class="dot '+st.cls+'"></span><span class="t-'+st.cls+'">'+st.text+'</span></span>'+
+          '<span style="text-align:right"><b>#'+dev.lastSyncedVersion+'</b> '+verBadge(dev)+'</span>'+
+        '</div>'+
+        '<div class="kv" style="margin-top:12px">'+
+          '<div class="row"><span class="k">Last seen</span><span class="v">'+seenLabel(dev.lastActiveAt||dev.createdAt)+'</span></div>'+
+          '<div class="row"><span class="k">Last sync</span><span class="v">'+seenLabel(dev.lastActiveAt||dev.createdAt)+'</span></div>'+
+        '</div>'+
+        (isPrimary
+          ? '<div style="margin-top:12px" class="muted">This is the primary device and cannot be removed here.</div>'
+          : '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center" onclick="viewDevice(\\''+esc(dev.deviceId)+'\\')">View Details</button>'+
+            '<button class="btn btn-danger btn-sm" style="flex:1;justify-content:center" onclick="askRemove(\\''+esc(dev.deviceId)+'\\',\\''+esc(dev.name)+'\\')">Delete Device</button></div>');
+      mc.appendChild(card);
+    });
+  }
+
+  function renderSyncInfo(d){
+    document.getElementById("siVer").textContent = "#"+d.cloudVersion;
+    document.getElementById("siUp").textContent = fmtDateTime(d.generatedAt);
+    var mon=(d.devices||[]).filter(function(x){return x.role!=="PRIMARY";});
+    var lastDownload = mon.reduce(function(m,x){return Math.max(m,x.lastActiveAt||0);},0) || d.generatedAt;
+    document.getElementById("siDown").textContent = fmtDateTime(lastDownload);
+    var pend=(d.devices||[]).reduce(function(a,b){return a+(b.pending||0);},0);
+    document.getElementById("siPending").textContent = pend;
+    document.getElementById("siFailed").textContent = 0;
+    document.getElementById("siNext").textContent = fmtTime(d.generatedAt + 10*60*1000);
+    var syncedOk = d.overall==="ok";
+    var ni=document.getElementById("niState"), nis=document.getElementById("niStateSub");
+    var box = ni.closest(".notice");
+    if(syncedOk){ box.className="notice green"; ni.textContent="Synced"; nis.textContent="Your data is up to date across all devices."; }
+    else if(d.overall==="warn"){ box.className="notice info"; ni.textContent="Monitoring device is behind"; nis.textContent="A device is catching up. It will update automatically."; ni.style.color="var(--amber)"; }
+    else { box.className="notice info"; ni.textContent="Sync error"; nis.textContent="There was a problem reaching the cloud. Retrying automatically."; ni.style.color="var(--red)"; }
+  }
+
+  function renderAuthHistory(devs){
+    var tb=document.getElementById("authRows"), mc=document.getElementById("authCards");
+    tb.innerHTML=""; mc.innerHTML="";
+    var rows = devs.slice().sort(function(a,b){return (b.createdAt||0)-(a.createdAt||0);});
+    if(!rows.length){ tb.innerHTML='<tr><td colspan="4" class="muted">No authorization history.</td></tr>'; return; }
+    rows.forEach(function(dev){
+      var detail = dev.role==="PRIMARY"?"Primary device connected":"Monitoring device connected";
+      var tr=document.createElement("tr");
+      tr.innerHTML='<td>'+fmtDateTime(dev.createdAt)+'</td><td><b>'+esc(dev.name)+'</b></td>'+
+        '<td><span class="pill"><span class="dot green"></span><span class="t-green">Authorized</span></span></td>'+
+        '<td class="muted">'+detail+'</td>';
+      tb.appendChild(tr);
+      var card=document.createElement("div"); card.className="card"; card.style.margin="0";card.style.boxShadow="none";card.style.border="1px solid var(--line)";
+      card.innerHTML='<div style="display:flex;justify-content:space-between"><b>'+esc(dev.name)+'</b>'+
+        '<span class="pill"><span class="dot green"></span><span class="t-green">Authorized</span></span></div>'+
+        '<div class="muted" style="margin-top:4px">'+fmtDateTime(dev.createdAt)+'</div>'+
+        '<div style="margin-top:4px">'+detail+'</div>';
+      mc.appendChild(card);
+    });
+  }
+
+  // --- Remove device ---
+  function askRemove(id,name){ pendingRemoveId=id; document.getElementById("mDev").textContent=name;
+    document.getElementById("modal").classList.add("show"); }
+  function closeModal(){ document.getElementById("modal").classList.remove("show"); pendingRemoveId=null; }
+  function confirmRemove(){
+    if(!pendingRemoveId) return;
+    var btn=document.getElementById("mConfirm"); btn.disabled=true; btn.textContent="Removing…";
+    fetch("/v1/system-revoke?key="+encodeURIComponent(KEY), {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({deviceId:pendingRemoveId})})
+      .then(function(r){ if(!r.ok) throw new Error("failed"); return r.json(); })
+      .then(function(){ closeModal(); toast("✓ Device removed"); load(); })
+      .catch(function(){ toast("Could not remove device","err"); })
+      .finally(function(){ btn.disabled=false; btn.textContent="Remove Device"; });
+  }
+  function viewDevice(id){
+    var dev=(latest&&latest.devices||[]).find(function(x){return x.deviceId===id;});
+    if(!dev) return;
+    var st=devStatus(dev);
+    toast(dev.name+" · "+st.text+" · #"+dev.lastSyncedVersion);
+  }
+  function showAdd(){ toast("Open the MedTrack app on the primary device to generate a pairing code."); }
+
+  function toast(msg, kind){ var t=document.getElementById("toast"); t.textContent=msg;
+    t.className="toast show"+(kind==="err"?" err":""); clearTimeout(t._t); t._t=setTimeout(function(){t.className="toast";},2600); }
+
+  // --- Check sync flow ---
+  var STEPS=["API connected","Turso connected","Cloud version checked","Devices checked","Sync status verified"];
+  function checkSync(){
+    var m=document.getElementById("syncModal"); m.classList.add("show");
+    document.getElementById("syncTitle").textContent="Checking…";
+    document.getElementById("syncClose").style.display="none";
+    var ul=document.getElementById("syncSteps"); ul.innerHTML="";
+    var ic=document.getElementById("checkIc"); ic.textContent="⟳"; ic.style.display="inline-block";
+    STEPS.forEach(function(s){ var li=document.createElement("li"); li.innerHTML='<span class="mk">…</span>'+s; ul.appendChild(li); });
+    fetch("/v1/system-status?key="+encodeURIComponent(KEY)).then(function(r){ if(!r.ok) throw new Error("forbidden"); return r.json(); })
+      .then(function(d){
+        var lis=ul.querySelectorAll("li"); var i=0;
+        var timer=setInterval(function(){
+          if(i<lis.length){ lis[i].querySelector(".mk").textContent="✓"; lis[i].querySelector(".mk").style.color="var(--green)"; i++; }
+          else{
+            clearInterval(timer);
+            var t=document.getElementById("syncTitle");
+            if(d.overall==="ok"){ t.innerHTML='<span class="t-green">🟢 Everything is synchronized</span>'; }
+            else if(d.overall==="warn"){ t.innerHTML='<span class="t-amber">🟡 Monitoring device is behind</span>'; }
+            else{ t.innerHTML='<span class="t-red">🔴 Sync error</span>'; }
+            document.getElementById("syncClose").style.display="inline-flex";
+            ic.textContent="↻";
+            render(d);
+          }
+        }, 220);
+      })
+      .catch(function(){ document.getElementById("syncTitle").innerHTML='<span class="t-red">🔴 Could not reach the server</span>';
+        document.getElementById("syncClose").style.display="inline-flex"; ic.textContent="↻"; });
+  }
+  function closeSync(){ document.getElementById("syncModal").classList.remove("show"); }
+
+  function load(){
+    fetch("/v1/system-status?key="+encodeURIComponent(KEY)).then(function(r){ if(!r.ok) throw new Error("forbidden"); return r.json(); })
+      .then(render)
+      .catch(function(){ document.getElementById("gate").style.display="block";
+        document.getElementById("dash").style.display="none";
+        if(KEY) document.getElementById("gateErr").style.display="block"; });
+  }
+  if(!KEY){ document.getElementById("gate").style.display="block"; }
+  else { load(); setInterval(load, 30000); }
 </script>
 </body></html>`;
 }
