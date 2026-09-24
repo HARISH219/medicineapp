@@ -228,9 +228,11 @@ app.get("/v1/public-stats", async (req, res) => {
   }
 });
 
-// The web system/sync-health page (HTML). Fetches /v1/system-status?key=... client-side.
-app.get("/system", (_req, res) => {
-  res.set("Content-Type", "text/html; charset=utf-8").send(systemHtml());
+// System health is now consolidated into the single /devices dashboard. Keep /system as a
+// redirect so old links/bookmarks still work and everything lives on one page.
+app.get("/system", (req, res) => {
+  var key = req.query.key ? "?key=" + encodeURIComponent(req.query.key) : "";
+  res.redirect(302, "/devices" + key);
 });
 
 // The web "Devices & Sync" management page (HTML, light theme). Fetches /v1/system-status
@@ -239,20 +241,19 @@ app.get("/devices", (_req, res) => {
   res.set("Content-Type", "text/html; charset=utf-8").send(devicesHtml());
 });
 
-// Remove (revoke) a device from the web dashboard. Key-gated like the other dashboard
-// endpoints. Refuses to revoke a PRIMARY device so the account can never be locked out here.
+// Remove (revoke) ANY device from the web dashboard. Key-gated like the other dashboard
+// endpoints. Primary devices can be removed too — useful for cleaning up stale/duplicate
+// registrations from the web console.
 app.post("/v1/system-revoke", asyncRoute(async (req, res) => {
   if (!statsKeyOk(req)) return res.status(403).json({ error: "forbidden" });
   await ensureSchema().catch(() => {});
   const deviceId = String((req.body && req.body.deviceId) || "");
   if (!deviceId) return res.status(400).json({ error: "deviceId required" });
   const row = await db.execute({
-    sql: "SELECT device_id, role FROM devices WHERE device_id = ? AND revoked = 0 LIMIT 1",
+    sql: "SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0 LIMIT 1",
     args: [deviceId],
   });
-  const dev = row.rows[0];
-  if (!dev) return res.status(404).json({ error: "device not found" });
-  if (dev.role === "PRIMARY") return res.status(400).json({ error: "cannot remove the primary device" });
+  if (!row.rows[0]) return res.status(404).json({ error: "device not found" });
   await db.execute({
     sql: "UPDATE devices SET revoked = 1, session_token = NULL WHERE device_id = ?",
     args: [deviceId],
@@ -752,18 +753,16 @@ function landingHtml() {
   <div class="card">
     <p class="muted" style="margin-top:0">This is the private sync backend for the TB MedTrack app. It stores medication
     events and lets your authorized devices stay in sync. There is nothing to do here.</p>
-    <a class="btn" href="/devices">🖥 Devices &amp; Sync</a>
+    <a class="btn" href="/devices">🖥 Devices &amp; Sync (all-in-one)</a>
     <a class="btn" href="/stats" style="background:#334155;margin-left:8px">📊 Stats dashboard</a>
-    <a class="btn" href="/system" style="background:#334155;margin-left:8px">🩺 System / sync status</a>
-    <p class="muted" style="font-size:13px">All dashboards require an access key.</p>
+    <p class="muted" style="font-size:13px">The dashboard now includes devices, system health, and sync in one page. Requires an access key.</p>
   </div>
   <div class="card">
     <b>Endpoints</b>
     <div class="row"><span>Health</span><span class="muted">/health</span></div>
     <div class="row"><span>Status (JSON)</span><span class="muted">/status</span></div>
     <div class="row"><span>Stats dashboard</span><span class="muted">/stats?key=…</span></div>
-    <div class="row"><span>System / sync health</span><span class="muted">/system?key=…</span></div>
-    <div class="row"><span>Devices &amp; Sync</span><span class="muted">/devices?key=…</span></div>
+    <div class="row"><span>Devices, health &amp; sync</span><span class="muted">/devices?key=…</span></div>
     <div class="row"><span>Device sync API</span><span class="muted">/v1/*</span></div>
   </div>
   <div class="foot">Made with ❤️ by Harish · TB MedTrack</div>
@@ -1067,7 +1066,8 @@ function devicesHtml() {
 
   /* Cards */
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-    box-shadow:var(--shadow);padding:18px;margin-bottom:18px}
+    box-shadow:var(--shadow);padding:18px;margin-bottom:18px;scroll-margin-top:76px}
+  html{scroll-behavior:smooth}
   .card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px}
   .card-title{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px}
   .card-title .ic{color:var(--purple)}
@@ -1202,16 +1202,12 @@ function devicesHtml() {
   <aside class="sidebar" id="sidebar">
     <div class="logo"><span class="mark">✚</span><span>MedTrack</span></div>
     <nav class="nav">
-      <a href="#"><span class="ic">▦</span><span>Dashboard</span></a>
-      <a href="#"><span class="ic">💊</span><span>Medications</span></a>
-      <a href="#"><span class="ic">🗓</span><span>Schedule</span></a>
-      <a href="#"><span class="ic">📅</span><span>Calendar</span></a>
-      <a href="#"><span class="ic">🕘</span><span>History</span></a>
-      <a href="#" class="active"><span class="ic">🖥</span><span>Devices &amp; Sync</span></a>
-      <a href="/system"><span class="ic">🩺</span><span>System Health</span></a>
-      <a href="#"><span class="ic">🔔</span><span>Notifications</span></a>
-      <a href="#"><span class="ic">📋</span><span>Audit Logs</span></a>
-      <a href="#"><span class="ic">⚙️</span><span>Settings</span></a>
+      <a href="#top" class="active" onclick="navTo('top',this)"><span class="ic">🖥️</span><span>Devices &amp; Sync</span></a>
+      <a href="#sec-status" onclick="navTo('sec-status',this)"><span class="ic">☁️</span><span>Sync Status</span></a>
+      <a href="#sec-devices" onclick="navTo('sec-devices',this)"><span class="ic">📱</span><span>Connected Devices</span></a>
+      <a href="#sec-health" onclick="navTo('sec-health',this)"><span class="ic">🩺</span><span>System Health</span></a>
+      <a href="#sec-sync" onclick="navTo('sec-sync',this)"><span class="ic">🔄</span><span>Sync Information</span></a>
+      <a href="#sec-history" onclick="navTo('sec-history',this)"><span class="ic">🕓</span><span>Authorization History</span></a>
     </nav>
     <div class="side-foot"><div class="avatar" id="ava">H</div><div class="txt"><div class="nm" id="uname">MedTrack</div><div class="em">Health account</div></div></div>
   </aside>
@@ -1237,7 +1233,7 @@ function devicesHtml() {
 
       <div id="dash" style="display:none">
         <!-- Header -->
-        <div class="head">
+        <div class="head" id="top">
           <div>
             <h1>Devices &amp; Sync</h1>
             <p>Manage your authorized devices and monitor synchronization status.</p>
@@ -1249,7 +1245,7 @@ function devicesHtml() {
         </div>
 
         <!-- System status -->
-        <div class="card">
+        <div class="card" id="sec-status">
           <div class="overall-row">
             <span class="card-title"><span class="ic">☁️</span> Overall Sync Status</span>
             <span class="pill" id="overallPill"><span class="dot gray"></span><span>Loading…</span></span>
@@ -1279,7 +1275,7 @@ function devicesHtml() {
         </div>
 
         <!-- Connected devices -->
-        <div class="card">
+        <div class="card" id="sec-devices">
           <div class="card-head">
             <div>
               <div class="card-title"><span class="ic">🖥</span> Connected Devices</div>
@@ -1298,8 +1294,19 @@ function devicesHtml() {
           </div>
         </div>
 
+        <!-- System health -->
+        <div class="card" id="sec-health">
+          <div class="card-head">
+            <div>
+              <div class="card-title"><span class="ic">🩺</span> System Health</div>
+              <div class="card-sub">Live status of the cloud services powering MedTrack.</div>
+            </div>
+          </div>
+          <div class="kv" id="healthList"></div>
+        </div>
+
         <!-- Sync information -->
-        <div class="card">
+        <div class="card" id="sec-sync">
           <div class="card-head"><div class="card-title"><span class="ic">🔄</span> Sync Information</div></div>
           <div class="sync-cols">
             <div class="kv">
@@ -1325,7 +1332,7 @@ function devicesHtml() {
         </div>
 
         <!-- Authorization history -->
-        <div class="card">
+        <div class="card" id="sec-history">
           <div class="card-head">
             <div>
               <div class="card-title"><span class="ic">🕓</span> Device Authorization History</div>
@@ -1351,9 +1358,9 @@ function devicesHtml() {
 <div class="overlay" id="modal">
   <div class="modal">
     <div class="warn-ic">🗑</div>
-    <h3>Remove Monitoring Device?</h3>
+    <h3 id="mTitle">Remove Device?</h3>
     <div class="dev" id="mDev">—</div>
-    <p>This device will no longer be authorized to access your MedTrack monitoring data.</p>
+    <p id="mBody">This device will no longer be authorized to access your MedTrack data.</p>
     <div class="row">
       <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
       <button class="btn btn-danger" id="mConfirm" onclick="confirmRemove()">Remove Device</button>
@@ -1380,6 +1387,16 @@ function devicesHtml() {
   function toggleNav(open){
     document.getElementById("sidebar").classList.toggle("open", open);
     document.getElementById("scrim").classList.toggle("show", open);
+  }
+  // Single-click sidebar navigation: scroll to the section, highlight it, close the mobile drawer.
+  function navTo(id, el){
+    var target=document.getElementById(id);
+    if(target) target.scrollIntoView({behavior:"smooth", block:"start"});
+    var links=document.querySelectorAll(".nav a");
+    for(var i=0;i<links.length;i++) links[i].classList.remove("active");
+    if(el) el.classList.add("active");
+    toggleNav(false);
+    return false;
   }
   function go(){ var k=document.getElementById("key").value.trim(); if(k) location.search="?key="+encodeURIComponent(k); }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
@@ -1432,8 +1449,24 @@ function devicesHtml() {
     document.getElementById("ssPendingMeta").textContent = pend===0?"All up to date":"Awaiting sync";
 
     renderDevices(d.devices||[]);
+    renderHealth(d);
     renderSyncInfo(d);
     renderAuthHistory(d.devices||[]);
+  }
+
+  function renderHealth(d){
+    var el=document.getElementById("healthList"); if(!el) return;
+    el.innerHTML="";
+    (d.checks||[]).forEach(function(c){
+      var cls = c.status==="ok"?"green":c.status==="warn"?"amber":"red";
+      var txt = c.status==="ok"?"OK":c.status==="warn"?"Warning":"Error";
+      var row=document.createElement("div"); row.className="row";
+      row.innerHTML='<span class="k"><span class="dot '+cls+'"></span> '+esc(c.name)+
+        (c.detail?' <span class="muted" style="font-size:12px">· '+esc(c.detail)+'</span>':'')+'</span>'+
+        '<span class="v t-'+cls+'">'+txt+'</span>';
+      el.appendChild(row);
+    });
+    if(!(d.checks||[]).length) el.innerHTML='<div class="row"><span class="muted">No health data.</span></div>';
   }
 
   function setPill(id, cls, text){
@@ -1452,16 +1485,15 @@ function devicesHtml() {
       var st=devStatus(dev);
       var roleLabel = isPrimary?"PRIMARY":"MONITORING";
       var roleSub = isPrimary?"Main device":"Read only";
-      var thisBadge = dev.isThisDevice? '<span class="badge purple">This device</span>' : '';
-      var actions = isPrimary
-        ? '<span class="thisdev">This device</span>'
-        : '<button class="btn btn-ghost btn-sm" onclick="viewDevice(\\''+esc(dev.deviceId)+'\\')">View</button>'+
-          '<button class="btn btn-danger btn-sm" onclick="askRemove(\\''+esc(dev.deviceId)+'\\',\\''+esc(dev.name)+'\\')">Delete</button>';
+      // Every device is deletable from the web console.
+      var actions =
+        '<button class="btn btn-ghost btn-sm" onclick="viewDevice(\\''+esc(dev.deviceId)+'\\')">View</button>'+
+        '<button class="btn btn-danger btn-sm" onclick="askRemove(\\''+esc(dev.deviceId)+'\\',\\''+esc(dev.name)+'\\',\\''+esc(dev.role)+'\\')">Delete</button>';
 
       var tr=document.createElement("tr");
       tr.innerHTML=
         '<td><div class="dev-name"><span class="dev-ic">'+(isPrimary?"📱":"👀")+'</span>'+
-          '<span><span class="nm">'+esc(dev.name)+'</span> '+thisBadge+'<br><span class="sub">'+(isPrimary?"My Phone":"Monitor")+'</span></span></div></td>'+
+          '<span><span class="nm">'+esc(dev.name)+'</span><br><span class="sub">'+(isPrimary?"Primary phone":"Monitor")+'</span></span></div></td>'+
         '<td><span class="role">'+roleLabel+'<span class="sub">'+roleSub+'</span></span></td>'+
         '<td><span class="pill"><span class="dot '+st.cls+'"></span><span class="t-'+st.cls+'">'+st.text+'</span></span></td>'+
         '<td class="cellstack"><div class="top">'+(isToday(dev.lastActiveAt)?"Today":new Date(dev.lastActiveAt||Date.now()).toLocaleDateString([], {month:"short",day:"2-digit"}))+'</div><div class="bot">'+fmtTime(dev.lastActiveAt||dev.createdAt)+'</div></td>'+
@@ -1474,7 +1506,7 @@ function devicesHtml() {
       var card=document.createElement("div"); card.className="card"; card.style.margin="0"; card.style.boxShadow="none"; card.style.border="1px solid var(--line)";
       card.innerHTML=
         '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">'+
-          '<div class="dev-name"><span class="dev-ic">'+(isPrimary?"📱":"👀")+'</span><span><span class="nm">'+esc(dev.name)+'</span> '+thisBadge+'<br><span class="sub">'+(isPrimary?"My Phone":"Monitor")+'</span></span></div>'+
+          '<div class="dev-name"><span class="dev-ic">'+(isPrimary?"📱":"👀")+'</span><span><span class="nm">'+esc(dev.name)+'</span><br><span class="sub">'+(isPrimary?"Primary phone":"Monitor")+'</span></span></div>'+
           '<div style="text-align:right"><span class="role">'+roleLabel+'<span class="sub">'+roleSub+'</span></span></div>'+
         '</div>'+
         '<div style="display:flex;justify-content:space-between;margin-top:12px">'+
@@ -1485,10 +1517,8 @@ function devicesHtml() {
           '<div class="row"><span class="k">Last seen</span><span class="v">'+seenLabel(dev.lastActiveAt||dev.createdAt)+'</span></div>'+
           '<div class="row"><span class="k">Last sync</span><span class="v">'+seenLabel(dev.lastActiveAt||dev.createdAt)+'</span></div>'+
         '</div>'+
-        (isPrimary
-          ? '<div style="margin-top:12px" class="muted">This is the primary device and cannot be removed here.</div>'
-          : '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center" onclick="viewDevice(\\''+esc(dev.deviceId)+'\\')">View Details</button>'+
-            '<button class="btn btn-danger btn-sm" style="flex:1;justify-content:center" onclick="askRemove(\\''+esc(dev.deviceId)+'\\',\\''+esc(dev.name)+'\\')">Delete Device</button></div>');
+        '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center" onclick="viewDevice(\\''+esc(dev.deviceId)+'\\')">View Details</button>'+
+          '<button class="btn btn-danger btn-sm" style="flex:1;justify-content:center" onclick="askRemove(\\''+esc(dev.deviceId)+'\\',\\''+esc(dev.name)+'\\',\\''+esc(dev.role)+'\\')">Delete Device</button></div>';
       mc.appendChild(card);
     });
   }
@@ -1533,8 +1563,16 @@ function devicesHtml() {
   }
 
   // --- Remove device ---
-  function askRemove(id,name){ pendingRemoveId=id; document.getElementById("mDev").textContent=name;
-    document.getElementById("modal").classList.add("show"); }
+  function askRemove(id,name,role){
+    pendingRemoveId=id;
+    document.getElementById("mDev").textContent=name;
+    var isPrimary = role==="PRIMARY";
+    document.getElementById("mTitle").textContent = isPrimary ? "Remove Primary Device?" : "Remove Monitoring Device?";
+    document.getElementById("mBody").textContent = isPrimary
+      ? "This primary device will lose access to your MedTrack account. Use this to clean up old or duplicate registrations."
+      : "This device will no longer be authorized to access your MedTrack monitoring data.";
+    document.getElementById("modal").classList.add("show");
+  }
   function closeModal(){ document.getElementById("modal").classList.remove("show"); pendingRemoveId=null; }
   function confirmRemove(){
     if(!pendingRemoveId) return;
