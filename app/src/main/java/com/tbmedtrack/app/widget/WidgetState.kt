@@ -87,15 +87,23 @@ object WidgetStateProvider {
             "${it.medicineName}: ${it.tabletsScheduled} ${if (it.tabletsScheduled == 1) "tab" else "tabs"}"
         }
 
-        val statusText = when (phase) {
-            WidgetPhase.ALL_COMPLETE -> "All done! ♡"
-            WidgetPhase.OVERDUE -> "$taken / $total · check dose"
-            WidgetPhase.DUE -> "Due now ♡"
-            WidgetPhase.TAKEN -> "$taken / $total taken ♡"
-            WidgetPhase.UPCOMING -> nextLabel(doses)
+        // Food → medicine gap (main-device only feature; the widget never shows an "I have eaten"
+        // button and food events are not synced as actions). If a pending dose is still inside its
+        // food-gap window, surface that instead of the normal due/taken status.
+        val foodLine = foodGapLine(context, doses, now)
+
+        val statusText = when {
+            foodLine != null -> foodLine
+            else -> when (phase) {
+                WidgetPhase.ALL_COMPLETE -> "All done! ♡"
+                WidgetPhase.OVERDUE -> "$taken / $total · check dose"
+                WidgetPhase.DUE -> "Due now ♡"
+                WidgetPhase.TAKEN -> "$taken / $total taken ♡"
+                WidgetPhase.UPCOMING -> nextLabel(doses)
+            }
         }
         // Put the exact tablet count first when available (never a generic total).
-        val finalStatus = if (tabletLine != null) "$tabletLine · $statusText" else statusText
+        val finalStatus = if (tabletLine != null && foodLine == null) "$tabletLine · $statusText" else statusText
 
         return WidgetState(phase, mascot, dots, finalStatus, describe(phase, taken, total, doses))
     }
@@ -113,6 +121,32 @@ object WidgetStateProvider {
             return NextInfo(mws.medicine.name, day, next.tablets)
         }
         return null
+    }
+
+    /**
+     * Compact food-gap line for the widget, or null when no pending dose is food-blocked.
+     * Shows "Food gap · Medicine in Nm" while waiting, or "Medicine available now" once eligible.
+     */
+    private suspend fun foodGapLine(context: Context, doses: List<ScheduledDose>, now: Long): String? {
+        val repo = ServiceLocator.medRepository(context)
+        val foodRepo = ServiceLocator.foodRepository(context)
+        // Only relevant if a meal was recorded at all.
+        if (foodRepo.latestFood() == null) return null
+        var eligible: Long? = null
+        for (dose in doses) {
+            if (dose.status == DoseStatus.TAKEN) continue
+            val med = repo.getMedicine(dose.medicineId) ?: continue
+            val t = foodRepo.timingFor(med, dose.scheduledMillis) ?: continue
+            if (!t.foodAdjusted) continue
+            if (eligible == null || t.eligibleMillis > eligible!!) eligible = t.eligibleMillis
+        }
+        val e = eligible ?: return null
+        return if (now >= e) "💊 Medicine available now"
+        else {
+            val mins = ((e - now) / 60000L).toInt().coerceAtLeast(0)
+            if (mins >= 60) "🍽️ Food gap · in ${mins / 60}h ${mins % 60}m"
+            else "🍽️ Food gap · in ${mins}m"
+        }
     }
 
     private fun dotFor(dose: ScheduledDose, now: Long): Int = when {

@@ -83,6 +83,55 @@ class CriticalAlarmScheduler(private val context: Context) {
         scheduleAt(epochDay, timeMinutes, scheduledMillis, nextEscalation, triggerFor(scheduledMillis, nextEscalation))
     }
 
+    /**
+     * Schedule the FIRST critical alarm (escalation index 1) at an EXPLICIT time — used by the
+     * food-gap system so the critical alarm starts from (foodEligible + grace) instead of the raw
+     * scheduled time. Subsequent escalations repeat from there using the configured interval.
+     */
+    fun scheduleCriticalAt(epochDay: Long, timeMinutes: Int, scheduledMillis: Long, criticalStartMillis: Long) {
+        scheduleAt(epochDay, timeMinutes, scheduledMillis, escalation = 1, triggerAt = criticalStartMillis)
+    }
+
+    /** Configured repeat interval in ms (loaded by [refreshInterval]). */
+    fun intervalMillisValue(): Long = intervalMillis
+
+    /**
+     * The food-adjusted critical START time for an event, or null when no medicine in the event
+     * is food-gap delayed. Uses the most food-restrictive medicine (latest eligible time).
+     */
+    private suspend fun foodAdjustedCriticalStart(
+        repo: com.tbmedtrack.app.data.MedRepository,
+        date: LocalDate,
+        timeMinutes: Int,
+        scheduledMillis: Long
+    ): Long? {
+        val foodRepo = ServiceLocator.foodRepository(context)
+        val doses = repo.getDosesForDay(date).filter { it.timeMinutes == timeMinutes }
+        var best: com.tbmedtrack.app.data.FoodTiming? = null
+        for (dose in doses) {
+            val med = repo.getMedicine(dose.medicineId) ?: continue
+            val t = foodRepo.timingFor(med, scheduledMillis) ?: continue
+            if (t.foodAdjusted && (best == null || t.eligibleMillis > best!!.eligibleMillis)) best = t
+        }
+        return best?.criticalStartMillis
+    }
+
+    /**
+     * Schedule escalation [nextEscalation] at an EXPLICIT [triggerAt]. Used after a food-adjusted
+     * critical alarm fires so the next step repeats from the actual fire time + interval rather
+     * than being recomputed from the raw scheduled time.
+     */
+    fun scheduleNextEscalationAt(
+        epochDay: Long,
+        timeMinutes: Int,
+        scheduledMillis: Long,
+        nextEscalation: Int,
+        triggerAt: Long
+    ) {
+        if (nextEscalation > maxEscalations) return
+        scheduleAt(epochDay, timeMinutes, scheduledMillis, nextEscalation, triggerAt)
+    }
+
     private fun scheduleAt(
         epochDay: Long,
         timeMinutes: Int,
@@ -132,14 +181,31 @@ class CriticalAlarmScheduler(private val context: Context) {
                 val scheduledMillis = ScheduleUtil.toEpochMillis(date, t)
                 val pendingDose = repo.isEventPending(date.toEpochDay(), t)
                 if (!pendingDose) continue
-                // If the scheduled time is still in the future, start the chain at the time.
-                // If it's already past, resume escalation from the appropriate hour.
                 val now = System.currentTimeMillis()
+
+                // Food-gap awareness: if a recorded meal pushed this event's eligible time out,
+                // the critical alarm must start from (foodEligible + grace), not the raw schedule.
+                val foodCriticalStart = foodAdjustedCriticalStart(repo, date, t, scheduledMillis)
+
+                if (foodCriticalStart != null) {
+                    if (foodCriticalStart >= now) {
+                        scheduleCriticalAt(date.toEpochDay(), t, scheduledMillis, foodCriticalStart)
+                    } else {
+                        // Food-adjusted critical time already passed: resume at the next interval step.
+                        var trigger = foodCriticalStart
+                        var next = 1
+                        while (trigger < now && next <= maxEscalations) { trigger += intervalMillis; next++ }
+                        if (next <= maxEscalations) {
+                            scheduleNextEscalationAt(date.toEpochDay(), t, scheduledMillis, next, trigger)
+                        }
+                    }
+                    continue
+                }
+
+                // No food adjustment: original behavior.
                 if (scheduledMillis >= now) {
-                    // Future dose: schedule the normal reminder at its time.
                     scheduleEventChain(date.toEpochDay(), t, scheduledMillis)
                 } else {
-                    // Past & still pending: find the next escalation whose trigger is in the future.
                     var next = 1
                     while (next <= maxEscalations && triggerFor(scheduledMillis, next) < now) next++
                     if (next <= maxEscalations) {

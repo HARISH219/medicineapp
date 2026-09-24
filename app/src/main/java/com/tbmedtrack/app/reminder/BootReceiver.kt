@@ -27,6 +27,7 @@ class BootReceiver : BroadcastReceiver() {
                         ServiceLocator.deviceRepository(context).ensureRegistered()
                         ServiceLocator.alarmScheduler(context).rescheduleAll()
                         ServiceLocator.criticalAlarmScheduler(context).rescheduleTodayAndFuture()
+                        ServiceLocator.foodGapScheduler(context).rescheduleForToday()
                     } finally {
                         pending.finish()
                     }

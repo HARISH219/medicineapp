@@ -74,6 +74,10 @@ fun HomeScreen(
     var revertTarget by androidx.compose.runtime.remember {
         androidx.compose.runtime.mutableStateOf<DoseEvent?>(null)
     }
+    // Event the user wants to record via "I already took it" (with a chosen actual time).
+    var alreadyTookTarget by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<DoseEvent?>(null)
+    }
 
     Box(Modifier.fillMaxWidth()) {
         LazyColumn(
@@ -94,6 +98,26 @@ fun HomeScreen(
                         onMarkTaken = {
                             vm.markEventTaken(next)
                             showUndo(scope, snackbarHostState) { vm.revertEvent(next) }
+                        }
+                    )
+                }
+                if (!next.allTaken) {
+                    item {
+                        androidx.compose.material3.TextButton(
+                            onClick = { alreadyTookTarget = next },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("I already took it (enter time)") }
+                    }
+                }
+            }
+
+            state.food?.let { food ->
+                item {
+                    FoodTimingCard(
+                        food = food,
+                        onEaten = { vm.recordFood() },
+                        onOpenMedication = {
+                            state.nextDose?.let { onOpenEvent(it) }
                         }
                     )
                 }
@@ -166,6 +190,68 @@ fun HomeScreen(
             }
         )
     }
+
+    alreadyTookTarget?.let { target ->
+        AlreadyTookDialog(
+            event = target,
+            onDismiss = { alreadyTookTarget = null },
+            onConfirm = { actualTakenAt ->
+                vm.markEventTakenEarly(target, actualTakenAt)
+                alreadyTookTarget = null
+            }
+        )
+    }
+}
+
+/**
+ * "Already took medicine?" dialog: pick which dose (fixed to the selected event) and WHEN it was
+ * taken, then confirm. Stores the real take time (scheduled/taken/recorded stay distinct).
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun AlreadyTookDialog(
+    event: DoseEvent,
+    onDismiss: () -> Unit,
+    onConfirm: (actualTakenAt: Long) -> Unit
+) {
+    val label = when {
+        event.timeMinutes < 12 * 60 -> "Morning dose"
+        event.timeMinutes < 17 * 60 -> "Afternoon dose"
+        else -> "Night dose"
+    }
+    val nowLt = java.time.LocalTime.now(com.tbmedtrack.app.util.ScheduleUtil.zone())
+    val timeState = androidx.compose.material3.rememberTimePickerState(
+        initialHour = nowLt.hour, initialMinute = nowLt.minute, is24Hour = false
+    )
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("💊 Already took medicine?") },
+        text = {
+            Column {
+                Text("Which dose?", style = MaterialTheme.typography.bodyMedium, color = DarkOnSurfaceMuted)
+                Text(
+                    "$label • ${com.tbmedtrack.app.util.ScheduleUtil.formatTime(event.timeMinutes)}",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("When did you take it?", style = MaterialTheme.typography.bodyMedium, color = DarkOnSurfaceMuted)
+                Spacer(Modifier.height(8.dp))
+                androidx.compose.material3.TimePicker(state = timeState)
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val minutes = timeState.hour * 60 + timeState.minute
+                val actual = com.tbmedtrack.app.util.ScheduleUtil.toEpochMillis(
+                    java.time.LocalDate.ofEpochDay(event.epochDay), minutes
+                )
+                onConfirm(actual)
+            }) { Text("Confirm") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }
 
 private fun showUndo(
@@ -509,4 +595,113 @@ private fun MotivationalCard(complete: Boolean) {
             )
         }
     }
+}
+
+/**
+ * Food Timing card: last food, medicine-available time, live countdown, and the "I HAVE EATEN"
+ * button. When the food gap is complete it shows an "OPEN MEDICATION" affordance instead.
+ */
+@Composable
+private fun FoodTimingCard(
+    food: FoodUiState,
+    onEaten: () -> Unit,
+    onOpenMedication: () -> Unit
+) {
+    // Live 1-second ticker so the countdown updates on screen.
+    var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(food.medicineAvailableMillis, food.lastFoodMillis) {
+        while (true) {
+            now = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    val available = food.medicineAvailableMillis != null && now >= food.medicineAvailableMillis
+    val complete = available && food.hasPendingGapDose
+
+    SectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("🍽️", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (complete) "Food gap complete ✓" else "Food timing",
+                style = MaterialTheme.typography.titleMedium,
+                color = if (complete) StatusTaken else MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+
+        Text("Last food", style = MaterialTheme.typography.bodyMedium, color = DarkOnSurfaceMuted)
+        Text(
+            food.lastFoodMillis?.let { clockShort(it) } ?: "Not recorded",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        if (food.hasPendingGapDose && food.medicineAvailableMillis != null) {
+            Spacer(Modifier.height(8.dp))
+            Text("Medicine available", style = MaterialTheme.typography.bodyMedium, color = DarkOnSurfaceMuted)
+            Text(
+                if (available) "Available now" else clockShort(food.medicineAvailableMillis),
+                style = MaterialTheme.typography.titleMedium,
+                color = if (available) StatusTaken else DueOrange,
+                fontWeight = FontWeight.SemiBold
+            )
+            if (!available) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    countdownLabel(food.medicineAvailableMillis - now) + " remaining",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (food.lastFoodMillis != null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Delayed because you recorded food at ${clockShort(food.lastFoodMillis)}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DarkOnSurfaceMuted
+                    )
+                }
+            }
+        } else {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Tap when you eat so medicine timing stays accurate.",
+                style = MaterialTheme.typography.bodySmall,
+                color = DarkOnSurfaceMuted
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+        if (complete) {
+            Button(
+                onClick = onOpenMedication,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = StatusTaken, contentColor = Color.White)
+            ) { Text("OPEN MEDICATION", fontWeight = FontWeight.Bold) }
+        } else {
+            Button(
+                onClick = onEaten,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = DueOrange, contentColor = Color.White)
+            ) { Text("🍽️  I HAVE EATEN", fontWeight = FontWeight.Bold) }
+        }
+    }
+}
+
+private fun clockShort(millis: Long): String {
+    val lt = java.time.Instant.ofEpochMilli(millis)
+        .atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+    return com.tbmedtrack.app.util.ScheduleUtil.formatTime(lt.hour * 60 + lt.minute)
+}
+
+private fun countdownLabel(remainingMillis: Long): String {
+    val total = (remainingMillis / 1000).coerceAtLeast(0)
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) String.format("%dh %02dm %02ds", h, m, s)
+    else String.format("%02dm %02ds", m, s)
 }

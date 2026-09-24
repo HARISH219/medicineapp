@@ -229,6 +229,75 @@ object NotificationHelper {
         }
     }
 
+    /**
+     * Food → medicine gap reminder (reminder-only, never records anything).
+     * [early] true = the 10-minute "coming up" reminder; false = the "eligible now" notice.
+     * Explains the food delay: shows original schedule, food time, and earliest eligible time.
+     */
+    fun showFoodGapReminder(
+        context: Context,
+        timeMinutes: Int,
+        scheduledMillis: Long,
+        eligibleMillis: Long,
+        foodMillis: Long,
+        medicineNames: List<String>,
+        early: Boolean,
+        sound: Boolean,
+        vibration: Boolean
+    ) {
+        ensureChannel(context)
+        val notifId = notificationIdFor(scheduledMillis)
+
+        val contentIntent = PendingIntent.getActivity(
+            context, notifId,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        fun clock(m: Long) = com.tbmedtrack.app.util.ScheduleUtil
+            .localDateTime(m).toLocalTime()
+            .let { com.tbmedtrack.app.util.ScheduleUtil.formatTime(it.hour * 60 + it.minute) }
+
+        val title = if (early) "💊 Medicine coming up" else "💊 Medicine time"
+        val lead = if (early)
+            "Your medication can be taken in 10 minutes."
+        else
+            "Your medication can now be taken. Food gap complete ✓"
+        val body = buildString {
+            append(lead).append("\n")
+            append("Scheduled: ${ScheduleUtil.formatTime(timeMinutes)}\n")
+            if (foodMillis > 0) append("Food recorded: ${clock(foodMillis)}\n")
+            append("Earliest medication time: ${clock(eligibleMillis)}")
+            if (medicineNames.isNotEmpty()) {
+                append("\n")
+                append(medicineNames.joinToString("\n") { "• $it" })
+            }
+        }
+
+        val builder = NotificationCompat.Builder(context, ReminderKeys.CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_pill)
+            .setContentTitle(title)
+            .setContentText(lead)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setAutoCancel(true)
+            .setContentIntent(contentIntent)
+
+        if (!sound && !vibration) {
+            builder.setSilent(true)
+        } else {
+            var defaults = 0
+            if (sound) defaults = defaults or NotificationCompat.DEFAULT_SOUND
+            if (vibration) defaults = defaults or NotificationCompat.DEFAULT_VIBRATE
+            builder.setDefaults(defaults)
+        }
+
+        if (hasNotificationPermission(context)) {
+            NotificationManagerCompat.from(context).notify(notifId, builder.build())
+        }
+    }
+
     private fun actionPending(
         context: Context,
         action: String,

@@ -38,6 +38,13 @@ data class AppSettings(
     val criticalStartDelayMinutes: Int = 60,
     /** minutes-since-midnight of the primary morning dose (default 10:00) */
     val morningDoseMinutes: Int = 10 * 60,
+    /**
+     * Default food → medicine gap in minutes applied to medicines that inherit it
+     * (Medicine.foodGapMinutes == -1). Prescribed value for this regimen: 2 hours.
+     */
+    val defaultFoodGapMinutes: Int = 120,
+    /** grace period in minutes AFTER the food-adjusted eligible time before the critical alarm. */
+    val criticalGraceMinutes: Int = 30,
     /** whether monitor devices receive each kind of alert */
     val notifyMonitorNotRecorded: Boolean = true,
     val notifyMonitorTaken: Boolean = true,
@@ -63,6 +70,8 @@ class SettingsRepository(private val context: Context) {
         val ESCALATION_INTERVAL = intPreferencesKey("escalation_interval")
         val CRITICAL_START_DELAY = intPreferencesKey("critical_start_delay")
         val MORNING_DOSE = intPreferencesKey("morning_dose_minutes")
+        val DEFAULT_FOOD_GAP = intPreferencesKey("default_food_gap_minutes")
+        val CRITICAL_GRACE = intPreferencesKey("critical_grace_minutes")
         val NOTIFY_NOT_RECORDED = booleanPreferencesKey("notify_not_recorded")
         val NOTIFY_TAKEN = booleanPreferencesKey("notify_taken")
         val NOTIFY_CRITICAL = booleanPreferencesKey("notify_critical")
@@ -86,6 +95,8 @@ class SettingsRepository(private val context: Context) {
             escalationIntervalMinutes = p[Keys.ESCALATION_INTERVAL] ?: 60,
             criticalStartDelayMinutes = p[Keys.CRITICAL_START_DELAY] ?: 60,
             morningDoseMinutes = p[Keys.MORNING_DOSE] ?: (10 * 60),
+            defaultFoodGapMinutes = p[Keys.DEFAULT_FOOD_GAP] ?: 120,
+            criticalGraceMinutes = p[Keys.CRITICAL_GRACE] ?: 30,
             notifyMonitorNotRecorded = p[Keys.NOTIFY_NOT_RECORDED] ?: true,
             notifyMonitorTaken = p[Keys.NOTIFY_TAKEN] ?: true,
             notifyMonitorCritical = p[Keys.NOTIFY_CRITICAL] ?: true,
@@ -107,6 +118,8 @@ class SettingsRepository(private val context: Context) {
     suspend fun setEscalationIntervalMinutes(m: Int) = context.dataStore.edit { it[Keys.ESCALATION_INTERVAL] = m }
     suspend fun setCriticalStartDelayMinutes(m: Int) = context.dataStore.edit { it[Keys.CRITICAL_START_DELAY] = m }
     suspend fun setMorningDoseMinutes(m: Int) = context.dataStore.edit { it[Keys.MORNING_DOSE] = m }
+    suspend fun setDefaultFoodGapMinutes(m: Int) = context.dataStore.edit { it[Keys.DEFAULT_FOOD_GAP] = m }
+    suspend fun setCriticalGraceMinutes(m: Int) = context.dataStore.edit { it[Keys.CRITICAL_GRACE] = m }
     suspend fun setNotifyNotRecorded(v: Boolean) = context.dataStore.edit { it[Keys.NOTIFY_NOT_RECORDED] = v }
     suspend fun setNotifyTaken(v: Boolean) = context.dataStore.edit { it[Keys.NOTIFY_TAKEN] = v }
     suspend fun setNotifyCritical(v: Boolean) = context.dataStore.edit { it[Keys.NOTIFY_CRITICAL] = v }

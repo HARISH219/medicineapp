@@ -44,7 +44,23 @@ data class HomeUiState(
     val eventsTotal: Int = 0,
     val todayComplete: Boolean = false,
     /** phased medicines NOT scheduled today, with their next dose info */
-    val notScheduledToday: List<NotScheduledInfo> = emptyList()
+    val notScheduledToday: List<NotScheduledInfo> = emptyList(),
+    /** food → medicine gap state for the home Food Timing card (null = no gap configured today) */
+    val food: FoodUiState? = null
+)
+
+/** State for the home "Food Timing" card. */
+data class FoodUiState(
+    /** epoch millis of the most recent food event, or null if none recorded */
+    val lastFoodMillis: Long?,
+    /** earliest time the next pending dose may be taken, given the latest food + gap */
+    val medicineAvailableMillis: Long?,
+    /** true when the waiting period is complete (medicine available now) */
+    val available: Boolean,
+    /** true when there is a pending food-gapped dose that food would affect */
+    val hasPendingGapDose: Boolean,
+    /** the default gap minutes (for display) */
+    val gapMinutes: Int
 )
 
 data class NotScheduledInfo(
@@ -57,6 +73,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repo = ServiceLocator.medRepository(app)
     private val settings = ServiceLocator.settingsRepository(app)
+    private val foodRepo = ServiceLocator.foodRepository(app)
 
     private val _state = MutableStateFlow(HomeUiState())
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
@@ -122,6 +139,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             val eventsCompleted = events.count { it.allTaken }
             val todayComplete = eventsTotal > 0 && eventsCompleted == eventsTotal
 
+            val food = computeFoodState(doses)
+
             _state.value = HomeUiState(
                 greeting = greeting(),
                 dateLabel = today.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() } +
@@ -150,8 +169,47 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 eventsCompleted = eventsCompleted,
                 eventsTotal = eventsTotal,
                 todayComplete = todayComplete,
-                notScheduledToday = notScheduled
+                notScheduledToday = notScheduled,
+                food = food
             )
+        }
+    }
+
+    /**
+     * Build the Food Timing card state. Uses the most food-restrictive PENDING dose today to
+     * compute when medicine becomes available given the latest recorded meal.
+     */
+    private suspend fun computeFoodState(doses: List<com.tbmedtrack.app.data.model.ScheduledDose>): FoodUiState {
+        val defaultGap = runCatching { settings.settings.first().defaultFoodGapMinutes }.getOrDefault(120)
+        val lastFood = runCatching { foodRepo.latestFood() }.getOrNull()
+
+        // Among pending doses that have a food gap, find the latest eligible time.
+        var available: Long? = null
+        var hasGapDose = false
+        for (dose in doses) {
+            if (dose.status == com.tbmedtrack.app.data.db.DoseStatus.TAKEN) continue
+            val med = repo.getMedicine(dose.medicineId) ?: continue
+            val timing = runCatching { foodRepo.timingFor(med, dose.scheduledMillis) }.getOrNull() ?: continue
+            hasGapDose = true
+            if (available == null || timing.eligibleMillis > available!!) available = timing.eligibleMillis
+        }
+        val now = System.currentTimeMillis()
+        return FoodUiState(
+            lastFoodMillis = lastFood?.foodTimeMillis,
+            medicineAvailableMillis = available,
+            available = available != null && now >= available!!,
+            hasPendingGapDose = hasGapDose,
+            gapMinutes = defaultGap
+        )
+    }
+
+    /** Record "I have eaten" now, then recompute the food-gap alarm chain and refresh. */
+    fun recordFood() {
+        viewModelScope.launch {
+            foodRepo.recordFood()
+            ServiceLocator.foodGapScheduler(getApplication()).rescheduleForToday()
+            com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
+            refresh()
         }
     }
 
@@ -166,6 +224,25 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun markEventTaken(event: DoseEvent) {
         viewModelScope.launch {
             repo.markEventTaken(event.epochDay, event.timeMinutes)
+            event.doses.forEach {
+                com.tbmedtrack.app.reminder.NotificationHelper.cancel(getApplication(), it.scheduledMillis)
+            }
+            ServiceLocator.criticalAlarmScheduler(getApplication())
+                .cancelEventChain(event.epochDay, event.timeMinutes, event.scheduledMillis)
+            ServiceLocator.syncManager(getApplication()).queue()
+            com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
+            refresh()
+        }
+    }
+
+    /**
+     * "I already took it" — record an event as taken at an explicit actual time. When the actual
+     * time is earlier than scheduled, history shows TAKEN EARLY; the stored take time is the real
+     * time (never the scheduled time). Cancels reminders/critical for the event and syncs.
+     */
+    fun markEventTakenEarly(event: DoseEvent, actualTakenAt: Long) {
+        viewModelScope.launch {
+            repo.markEventTakenAt(event.epochDay, event.timeMinutes, actualTakenAt)
             event.doses.forEach {
                 com.tbmedtrack.app.reminder.NotificationHelper.cancel(getApplication(), it.scheduledMillis)
             }

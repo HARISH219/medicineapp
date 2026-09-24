@@ -11,6 +11,16 @@ object ReminderKeys {
     /** Mark an entire dose event (all medicines at a time) taken. */
     const val ACTION_MARK_EVENT_TAKEN = "com.tbmedtrack.app.ACTION_MARK_EVENT_TAKEN"
 
+    /** 10-minute "medicine coming up" reminder for a food-adjusted eligible time. */
+    const val ACTION_FOOD_EARLY = "com.tbmedtrack.app.ACTION_FOOD_EARLY"
+    /** "Medicine now eligible" notice at the food-adjusted eligible time. */
+    const val ACTION_FOOD_ELIGIBLE = "com.tbmedtrack.app.ACTION_FOOD_ELIGIBLE"
+
+    /** epoch millis of the food-adjusted earliest eligible time */
+    const val EXTRA_ELIGIBLE_MILLIS = "eligibleMillis"
+    /** epoch millis of the controlling food event */
+    const val EXTRA_FOOD_MILLIS = "foodMillis"
+
     const val EXTRA_MEDICINE_ID = "medicineId"
     const val EXTRA_SCHEDULE_ID = "scheduleId"
     const val EXTRA_SCHEDULED_MILLIS = "scheduledMillis"

@@ -41,7 +41,58 @@ class AlarmReceiver : BroadcastReceiver() {
                     finally { pending.finish() }
                 }
             }
+            ReminderKeys.ACTION_FOOD_EARLY, ReminderKeys.ACTION_FOOD_ELIGIBLE -> {
+                val epochDay = intent.getLongExtra(ReminderKeys.EXTRA_EPOCH_DAY, -1L)
+                val timeMinutes = intent.getIntExtra(ReminderKeys.EXTRA_TIME_MINUTES, -1)
+                val scheduledMillis = intent.getLongExtra(ReminderKeys.EXTRA_SCHEDULED_MILLIS, -1L)
+                val eligibleMillis = intent.getLongExtra(ReminderKeys.EXTRA_ELIGIBLE_MILLIS, -1L)
+                val foodMillis = intent.getLongExtra(ReminderKeys.EXTRA_FOOD_MILLIS, -1L)
+                if (epochDay < 0 || timeMinutes < 0) return
+                val early = intent.action == ReminderKeys.ACTION_FOOD_EARLY
+                val pending = goAsync()
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        handleFood(context, epochDay, timeMinutes, scheduledMillis, eligibleMillis, foodMillis, early)
+                    } finally { pending.finish() }
+                }
+            }
         }
+    }
+
+    /** 10-minute "coming up" reminder, or the "eligible now" notice. Reminder-only. */
+    private suspend fun handleFood(
+        context: Context,
+        epochDay: Long,
+        timeMinutes: Int,
+        scheduledMillis: Long,
+        eligibleMillis: Long,
+        foodMillis: Long,
+        early: Boolean
+    ) {
+        val repo = ServiceLocator.medRepository(context)
+        // If already recorded, don't nag.
+        if (!repo.isEventPending(epochDay, timeMinutes)) return
+        val settings = runCatching {
+            ServiceLocator.settingsRepository(context).settings.first()
+        }.getOrNull()
+        if (settings?.remindersEnabled == false) return
+
+        val date = ScheduleUtil.dateFromEpochDay(epochDay)
+        val names = repo.getDosesForDay(date)
+            .filter { it.timeMinutes == timeMinutes }
+            .map { it.medicineName }
+
+        NotificationHelper.showFoodGapReminder(
+            context = context,
+            timeMinutes = timeMinutes,
+            scheduledMillis = scheduledMillis,
+            eligibleMillis = eligibleMillis,
+            foodMillis = foodMillis,
+            medicineNames = names,
+            early = early,
+            sound = settings?.soundEnabled ?: true,
+            vibration = settings?.vibrationEnabled ?: true
+        )
     }
 
     private suspend fun handleCritical(
@@ -83,8 +134,11 @@ class AlarmReceiver : BroadcastReceiver() {
         // Notify monitor devices via the sync layer (real push happens through the backend).
         ServiceLocator.syncManager(context).queue()
 
-        // Schedule the next hourly escalation.
-        critical.scheduleNextEscalation(epochDay, timeMinutes, scheduledMillis, escalation + 1)
+        // Schedule the next escalation one interval after THIS fire time. Using the actual fire
+        // time keeps the cadence correct even when the chain started from a food-adjusted time.
+        critical.refreshInterval()
+        val nextTrigger = System.currentTimeMillis() + critical.intervalMillisValue()
+        critical.scheduleNextEscalationAt(epochDay, timeMinutes, scheduledMillis, escalation + 1, nextTrigger)
     }
 
     private suspend fun handle(context: Context, scheduleId: Long, scheduledMillis: Long) {
@@ -104,7 +158,14 @@ class AlarmReceiver : BroadcastReceiver() {
         val dosesToday = repo.getDosesForDay(date)
         val thisScheduled = dosesToday.any { it.medicineId == med.id && it.timeMinutes == sch.timeMinutes }
 
-        if (med.active && sch.enabled && remindersEnabled && thisScheduled) {
+        // Food-gap suppression: if a recorded meal pushed this medicine's eligible time later,
+        // do NOT fire the normal reminder now. The food-gap chain (early + eligible) fires instead.
+        val foodTiming = runCatching {
+            ServiceLocator.foodRepository(context).timingFor(med, scheduledMillis)
+        }.getOrNull()
+        val foodBlocked = foodTiming?.foodAdjusted == true && foodTiming.isWaiting()
+
+        if (med.active && sch.enabled && remindersEnabled && thisScheduled && !foodBlocked) {
             // Only notify if not already taken.
             val existing = db.logDao().findLog(med.id, scheduleId, scheduledMillis)
             if (existing?.status != DoseStatus.TAKEN) {

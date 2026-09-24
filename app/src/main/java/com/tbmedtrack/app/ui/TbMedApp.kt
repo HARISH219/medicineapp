@@ -82,7 +82,8 @@ fun TbMedApp() {
         currentRoute == Routes.IMPORT_HISTORY ||
         currentRoute == Routes.CLOUD_SYNC ||
         currentRoute?.startsWith(Routes.PHASE_PREVIEW) == true ||
-        currentRoute?.startsWith(Routes.EVENT_DETAIL) == true
+        currentRoute?.startsWith(Routes.EVENT_DETAIL) == true ||
+        currentRoute == Routes.FOOD_HISTORY
 
     ScreenBackground {
         Scaffold(
@@ -150,7 +151,8 @@ fun TbMedApp() {
                         onOpenDevices = { navController.navigate(Routes.DEVICES) },
                         onOpenMonitor = { navController.navigate(Routes.MONITOR) },
                         onImportHistory = { navController.navigate(Routes.IMPORT_HISTORY) },
-                        onOpenCloudSync = { navController.navigate(Routes.CLOUD_SYNC) }
+                        onOpenCloudSync = { navController.navigate(Routes.CLOUD_SYNC) },
+                        onOpenFoodHistory = { navController.navigate(Routes.FOOD_HISTORY) }
                     )
                 }
                 composable(Routes.TREATMENT) {
@@ -163,6 +165,7 @@ fun TbMedApp() {
                 composable(Routes.MONITOR) { com.tbmedtrack.app.ui.monitor.MonitorScreen() }
                 composable(Routes.TIMELINE) { com.tbmedtrack.app.ui.timeline.TimelineScreen() }
                 composable(Routes.CLOUD_SYNC) { com.tbmedtrack.app.ui.cloud.CloudSyncScreen() }
+                composable(Routes.FOOD_HISTORY) { com.tbmedtrack.app.ui.food.FoodHistoryScreen() }
                 composable(
                     route = "${Routes.PHASE_PREVIEW}/{id}",
                     arguments = listOf(navArgument("id") { type = NavType.LongType })
@@ -312,6 +315,7 @@ private fun topTitle(route: String?): String = when {
     route == Routes.TIMELINE -> "Treatment timeline"
     route == Routes.IMPORT_HISTORY -> "Import history"
     route == Routes.CLOUD_SYNC -> "Cloud sync"
+    route == Routes.FOOD_HISTORY -> "Food timing history"
     route?.startsWith(Routes.PHASE_PREVIEW) == true -> "Schedule preview"
     else -> "TB MedTrack"
 }

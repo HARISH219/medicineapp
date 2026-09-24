@@ -434,6 +434,33 @@ class MedRepository(
         return count
     }
 
+    /**
+     * Record all doses at [timeMinutes] on [epochDay] as taken at an EXPLICIT actual time
+     * ([actualTakenAt]). Used by the "I already took it" quick record so the stored take time is
+     * the real time — not the scheduled time and not "now". recordedAt is stamped to now.
+     * Cancels reminders/critical chain for the event.
+     */
+    suspend fun markEventTakenAt(epochDay: Long, timeMinutes: Int, actualTakenAt: Long) {
+        val date = LocalDate.ofEpochDay(epochDay)
+        val doses = getDosesForDay(date).filter { it.timeMinutes == timeMinutes }
+        val now = System.currentTimeMillis()
+        for (dose in doses) {
+            if (dose.status == DoseStatus.TAKEN) continue
+            val existing = logDao.findLog(dose.medicineId, dose.scheduleId, dose.scheduledMillis)
+            writeEvent(
+                (existing ?: logRow(dose, DoseStatus.TAKEN, actualTakenAt)).copy(
+                    status = DoseStatus.TAKEN,
+                    actualTakenDateTime = actualTakenAt,
+                    takenTimePrecision = com.tbmedtrack.app.data.db.TakenTimePrecision.EXACT,
+                    recordedAt = now
+                ),
+                action = com.tbmedtrack.app.data.db.AuditAction.MARK_TAKEN,
+                operationType = com.tbmedtrack.app.data.db.OperationType.MEDICATION_TAKEN,
+                oldStatus = existing?.status ?: DoseStatus.SCHEDULED
+            )
+        }
+    }
+
     /** Mark all doses at a given time on a day as taken. Returns the taken timestamp. */
     suspend fun markEventTaken(epochDay: Long, timeMinutes: Int): Long {
         val date = LocalDate.ofEpochDay(epochDay)

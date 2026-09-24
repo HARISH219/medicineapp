@@ -45,6 +45,7 @@ fun SettingsScreen(
     onOpenMonitor: () -> Unit = {},
     onImportHistory: () -> Unit = {},
     onOpenCloudSync: () -> Unit = {},
+    onOpenFoodHistory: () -> Unit = {},
     vm: SettingsViewModel = viewModel()
 ) {
     val settings by vm.settingsFlow.collectAsStateWithLifecycle()
@@ -54,6 +55,8 @@ fun SettingsScreen(
     var pendingImportUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var showCustomStartDelay by remember { mutableStateOf(false) }
     var showCustomRepeat by remember { mutableStateOf(false) }
+    var showCustomFoodGap by remember { mutableStateOf(false) }
+    var showCustomGrace by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -192,6 +195,68 @@ fun SettingsScreen(
                 }
                 Spacer(Modifier.height(10.dp))
                 SwitchRow("Reduce motion (no flashing alert)", settings.reduceMotion) { vm.setReduceMotion(it) }
+            }
+        }
+
+        item {
+            SectionCard {
+                Text("Food → medicine gap", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Default wait after eating before medicine may be taken. This follows your " +
+                        "prescription — change it only if your treatment instructions say so. " +
+                        "Individual medicines can override this in their own settings.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                Text("Default food → medicine gap", style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(6.dp))
+                val gapPresets = listOf(0, 30, 60, 90, 120, 180)
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    gapPresets.forEach { m ->
+                        FilterChip(
+                            selected = settings.defaultFoodGapMinutes == m,
+                            onClick = { vm.setDefaultFoodGap(m) },
+                            label = { Text(if (m == 0) "None" else minutesLabel(m)) }
+                        )
+                    }
+                    val gapCustom = settings.defaultFoodGapMinutes !in gapPresets
+                    FilterChip(
+                        selected = gapCustom,
+                        onClick = { showCustomFoodGap = true },
+                        label = { Text(if (gapCustom) "Custom (${minutesLabel(settings.defaultFoodGapMinutes)})" else "Custom") }
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("Critical grace after eligible time", style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "The critical alarm starts this long after the food-adjusted eligible time.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
+                val gracePresets = listOf(15, 30, 45, 60, 120)
+                androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    gracePresets.forEach { m ->
+                        FilterChip(
+                            selected = settings.criticalGraceMinutes == m,
+                            onClick = { vm.setCriticalGrace(m) },
+                            label = { Text(minutesLabel(m)) }
+                        )
+                    }
+                    val graceCustom = settings.criticalGraceMinutes !in gracePresets
+                    FilterChip(
+                        selected = graceCustom,
+                        onClick = { showCustomGrace = true },
+                        label = { Text(if (graceCustom) "Custom (${minutesLabel(settings.criticalGraceMinutes)})" else "Custom") }
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onOpenFoodHistory, modifier = Modifier.fillMaxWidth()) {
+                    Text("View food timing history")
+                }
             }
         }
 
@@ -362,6 +427,24 @@ fun SettingsScreen(
             initial = settings.escalationIntervalMinutes,
             onConfirm = { vm.setEscalationInterval(it); showCustomRepeat = false },
             onDismiss = { showCustomRepeat = false }
+        )
+    }
+
+    if (showCustomFoodGap) {
+        CustomMinutesDialog(
+            title = "Default food → medicine gap",
+            initial = settings.defaultFoodGapMinutes,
+            onConfirm = { vm.setDefaultFoodGap(it); showCustomFoodGap = false },
+            onDismiss = { showCustomFoodGap = false }
+        )
+    }
+
+    if (showCustomGrace) {
+        CustomMinutesDialog(
+            title = "Critical grace after eligible time",
+            initial = settings.criticalGraceMinutes,
+            onConfirm = { vm.setCriticalGrace(it); showCustomGrace = false },
+            onDismiss = { showCustomGrace = false }
         )
     }
 }

@@ -27,6 +27,7 @@ object Routes {
     const val CLOUD_SYNC = "cloud_sync"
     const val PHASE_PREVIEW = "phase_preview" // /{id}
     const val EVENT_DETAIL = "event_detail"   // /{day}/{time}
+    const val FOOD_HISTORY = "food_history"
 }
 
 /**

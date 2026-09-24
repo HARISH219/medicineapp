@@ -2,11 +2,14 @@ package com.tbmedtrack.app
 
 import android.content.Context
 import com.tbmedtrack.app.data.DeviceRepository
+import com.tbmedtrack.app.data.FoodRepository
 import com.tbmedtrack.app.data.MedRepository
 import com.tbmedtrack.app.data.db.AppDatabase
+import kotlinx.coroutines.flow.first
 import com.tbmedtrack.app.data.settings.SettingsRepository
 import com.tbmedtrack.app.reminder.AlarmScheduler
 import com.tbmedtrack.app.reminder.CriticalAlarmScheduler
+import com.tbmedtrack.app.reminder.FoodGapScheduler
 import com.tbmedtrack.app.sync.SyncManager
 
 /** Simple manual dependency container (no DI framework needed). */
@@ -18,6 +21,25 @@ object ServiceLocator {
     @Volatile private var criticalScheduler: CriticalAlarmScheduler? = null
     @Volatile private var syncManager: SyncManager? = null
     @Volatile private var deviceRepo: DeviceRepository? = null
+    @Volatile private var foodRepo: FoodRepository? = null
+
+    fun foodRepository(context: Context): FoodRepository =
+        foodRepo ?: synchronized(this) {
+            foodRepo ?: run {
+                val db = AppDatabase.get(context)
+                val settingsRepo = settingsRepository(context)
+                val repo = FoodRepository(db.foodEventDao()) {
+                    val s = settingsRepo.settings.first()
+                    FoodRepository.FoodGapSettings(
+                        defaultFoodGapMinutes = s.defaultFoodGapMinutes,
+                        criticalGraceMinutes = s.criticalGraceMinutes
+                    )
+                }
+                repo.currentDeviceId = deviceRepository(context).deviceId
+                foodRepo = repo
+                repo
+            }
+        }
 
     fun deviceRepository(context: Context): DeviceRepository =
         deviceRepo ?: synchronized(this) {
@@ -56,5 +78,12 @@ object ServiceLocator {
     fun syncManager(context: Context): SyncManager =
         syncManager ?: synchronized(this) {
             syncManager ?: SyncManager(context.applicationContext).also { syncManager = it }
+        }
+
+    @Volatile private var foodGapScheduler: FoodGapScheduler? = null
+
+    fun foodGapScheduler(context: Context): FoodGapScheduler =
+        foodGapScheduler ?: synchronized(this) {
+            foodGapScheduler ?: FoodGapScheduler(context.applicationContext).also { foodGapScheduler = it }
         }
 }

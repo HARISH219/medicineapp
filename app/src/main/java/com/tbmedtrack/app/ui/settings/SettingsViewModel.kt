@@ -51,6 +51,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         settings.setCriticalStartDelayMinutes(m)
         ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
     }
+    fun setDefaultFoodGap(m: Int) = viewModelScope.launch {
+        settings.setDefaultFoodGapMinutes(m)
+        // Recompute food-gap chains for today with the new default.
+        ServiceLocator.foodGapScheduler(getApplication()).rescheduleForToday()
+    }
+    fun setCriticalGrace(m: Int) = viewModelScope.launch {
+        settings.setCriticalGraceMinutes(m)
+        ServiceLocator.foodGapScheduler(getApplication()).rescheduleForToday()
+        ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
+    }
 
     fun exportBackup(uri: Uri) = viewModelScope.launch {
         val result = backup.export(uri)

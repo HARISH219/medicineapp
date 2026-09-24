@@ -77,11 +77,30 @@ class CriticalAlertActivity : ComponentActivity() {
                     .filter { it.timeMinutes == timeMinutes }
                     .map { it.medicineName }
             }
+            // Food-gap context (may be null when no meal affected this dose).
+            val foodInfo by produceState<FoodAlertInfo?>(initialValue = null, epochDay, timeMinutes) {
+                val date = ScheduleUtil.dateFromEpochDay(epochDay)
+                val foodRepo = ServiceLocator.foodRepository(this@CriticalAlertActivity)
+                var best: com.tbmedtrack.app.data.FoodTiming? = null
+                for (dose in repo.getDosesForDay(date).filter { it.timeMinutes == timeMinutes }) {
+                    val med = repo.getMedicine(dose.medicineId) ?: continue
+                    val t = foodRepo.timingFor(med, scheduledMillis) ?: continue
+                    if (t.foodAdjusted && (best == null || t.eligibleMillis > best!!.eligibleMillis)) best = t
+                }
+                value = best?.let {
+                    FoodAlertInfo(
+                        foodMillis = it.foodTimeMillis,
+                        eligibleMillis = it.eligibleMillis,
+                        criticalMillis = it.criticalStartMillis
+                    )
+                }
+            }
 
             com.tbmedtrack.app.ui.theme.TBMedTrackTheme {
                 CriticalAlertScreen(
                     timeMinutes = timeMinutes,
                     medicineNames = names,
+                    foodInfo = foodInfo,
                     reduceMotion = reduceMotion,
                     onOpenApp = { openAppAndFinish() },
                     onClose = { finish() }
@@ -109,10 +128,18 @@ class CriticalAlertActivity : ComponentActivity() {
  * the NOT RECORDED status, and lets the user open the app or close the alert. Closing does not
  * record anything — the next configured alarm will fire until the dose is recorded elsewhere.
  */
+/** Food-gap context for the critical alert (null when no meal affected the dose). */
+data class FoodAlertInfo(
+    val foodMillis: Long?,
+    val eligibleMillis: Long,
+    val criticalMillis: Long
+)
+
 @Composable
 private fun CriticalAlertScreen(
     timeMinutes: Int,
     medicineNames: List<String>,
+    foodInfo: FoodAlertInfo?,
     reduceMotion: Boolean,
     onOpenApp: () -> Unit,
     onClose: () -> Unit
@@ -167,8 +194,17 @@ private fun CriticalAlertScreen(
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(20.dp))
-        Text("Scheduled: ${ScheduleUtil.formatTime(timeMinutes)}",
+        Text("Original schedule: ${ScheduleUtil.formatTime(timeMinutes)}",
             color = Color.White, fontSize = 16.sp)
+        if (foodInfo != null) {
+            foodInfo.foodMillis?.let {
+                Text("Food recorded: ${clockLabel(it)}", color = Color.White, fontSize = 16.sp)
+            }
+            Text("Earliest eligible time: ${clockLabel(foodInfo.eligibleMillis)}",
+                color = Color.White, fontSize = 16.sp)
+            Text("Critical alarm: ${clockLabel(foodInfo.criticalMillis)}",
+                color = Color.White, fontSize = 16.sp)
+        }
         Text("Current: $nowLabel", color = Color.White, fontSize = 16.sp)
         Spacer(Modifier.height(20.dp))
         if (medicineNames.isNotEmpty()) {
@@ -204,4 +240,9 @@ private fun CriticalAlertScreen(
             textAlign = TextAlign.Center
         )
     }
+}
+
+private fun clockLabel(millis: Long): String {
+    val lt = ScheduleUtil.localDateTime(millis).toLocalTime()
+    return ScheduleUtil.formatTime(lt.hour * 60 + lt.minute)
 }

@@ -25,6 +25,14 @@ data class Medicine(
      * DoseSchedule rows normally. Recognized rules are defined in [ScheduleRule].
      */
     val scheduleRule: String? = null,
+    /**
+     * Required wait after eating before this medicine may be taken (the "food → medicine gap"),
+     * in minutes. Per prescription, configurable per medicine — NOT a universal rule.
+     *   -1 = inherit the app's global default food gap
+     *    0 = no food gap (may be taken any time)
+     *   >0 = explicit gap in minutes
+     */
+    val foodGapMinutes: Int = -1,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     /** epoch day (LocalDate.toEpochDay) */

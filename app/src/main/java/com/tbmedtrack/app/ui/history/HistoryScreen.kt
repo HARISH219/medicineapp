@@ -176,6 +176,7 @@ private fun HistoryEventRow(
 
 private fun iconFor(hs: HistoryStatus): String = when (hs) {
     HistoryStatus.TAKEN -> "✓"
+    HistoryStatus.TAKEN_EARLY -> "✓"
     HistoryStatus.TAKEN_LATE -> "✓"
     HistoryStatus.ADDED_LATER -> "📝"
     HistoryStatus.NOT_RECORDED -> "⚠"
@@ -189,6 +190,11 @@ private fun statusFor(dose: ScheduledDose, hs: HistoryStatus): Triple<androidx.c
         HistoryStatus.TAKEN -> {
             val t = dose.takenAtMillis?.let { "Taken at ${formatClock(it)}" } ?: "Taken"
             Triple(StatusTaken, "TAKEN", t)
+        }
+        HistoryStatus.TAKEN_EARLY -> {
+            val t = dose.takenAtMillis?.let { formatClock(it) } ?: ""
+            Triple(StatusTaken, "TAKEN EARLY",
+                if (t.isNotEmpty()) "Taken at $t (before scheduled)" else "Taken before scheduled time")
         }
         HistoryStatus.TAKEN_LATE -> {
             val t = dose.takenAtMillis?.let { formatClock(it) } ?: ""

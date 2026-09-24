@@ -62,7 +62,7 @@ fun ScheduledDose.presentation(nowMillis: Long = System.currentTimeMillis()): Pr
  *  - UPCOMING      : scheduled later today / future
  *  - SNOOZED       : snoozed
  */
-enum class HistoryStatus { TAKEN, TAKEN_LATE, ADDED_LATER, NOT_RECORDED, UPCOMING, SNOOZED }
+enum class HistoryStatus { TAKEN, TAKEN_EARLY, TAKEN_LATE, ADDED_LATER, NOT_RECORDED, UPCOMING, SNOOZED }
 
 /** Minutes after the scheduled time beyond which a recorded take counts as "late". */
 private const val LATE_THRESHOLD_MIN = 60
@@ -74,6 +74,8 @@ fun ScheduledDose.historyStatus(nowMillis: Long = System.currentTimeMillis()): H
             recordedLater || historical -> HistoryStatus.ADDED_LATER
             takenAtMillis != null &&
                 takenAtMillis - scheduledMillis > LATE_THRESHOLD_MIN * 60_000L -> HistoryStatus.TAKEN_LATE
+            takenAtMillis != null &&
+                scheduledMillis - takenAtMillis > LATE_THRESHOLD_MIN * 60_000L -> HistoryStatus.TAKEN_EARLY
             else -> HistoryStatus.TAKEN
         }
         DoseStatus.SNOOZED -> HistoryStatus.SNOOZED
