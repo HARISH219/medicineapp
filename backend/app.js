@@ -42,6 +42,12 @@ function ensureSchema() {
       const msg = String((e && e.message) || "").toLowerCase();
       if (!msg.includes("duplicate column") && !msg.includes("already exists")) throw e;
     }
+    try {
+      await db.execute("ALTER TABLE monitor_food_events ADD COLUMN gap_minutes INTEGER NOT NULL DEFAULT 0");
+    } catch (e) {
+      const msg = String((e && e.message) || "").toLowerCase();
+      if (!msg.includes("duplicate column") && !msg.includes("already exists") && !msg.includes("no such table")) throw e;
+    }
     await db.batch([
       {
         sql: `CREATE TABLE IF NOT EXISTS monitor_doses (
@@ -55,7 +61,8 @@ function ensureSchema() {
       {
         sql: `CREATE TABLE IF NOT EXISTS monitor_food_events (
           uuid TEXT PRIMARY KEY, user_id TEXT NOT NULL, food_at INTEGER NOT NULL,
-          recorded_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+          recorded_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          gap_minutes INTEGER NOT NULL DEFAULT 0
         )`,
         args: [],
       },
@@ -142,7 +149,7 @@ app.get("/status", (_req, res) =>
   res.json({
     service: "TB MedTrack sync backend",
     status: "ok",
-    endpoints: ["/health", "/status", "/stats", "/system", "/devices", "/v1/public-stats", "/v1/system-status", "/v1/system-revoke", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
+    endpoints: ["/health", "/status", "/stats", "/system", "/devices", "/preview", "/v1/public-stats", "/v1/system-status", "/v1/system-revoke", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
   })
 );
 
@@ -239,6 +246,14 @@ app.get("/system", (req, res) => {
 // client-side and can remove monitoring devices via /v1/system-revoke. Key-gated in the page.
 app.get("/devices", (_req, res) => {
   res.set("Content-Type", "text/html; charset=utf-8").send(devicesHtml());
+});
+
+// Interactive browser App Preview. A faithful HTML/JS re-creation of the Android Primary and
+// Monitoring screens for testing UI/navigation/states/sync WITHOUT building an APK. It runs on
+// demo data only (🧪 preview mode) and never touches the real database. Device is chosen via
+// ?device=primary | ?device=monitor and can be switched live in the page.
+app.get("/preview", (_req, res) => {
+  res.set("Content-Type", "text/html; charset=utf-8").send(previewHtml());
 });
 
 // Remove (revoke) ANY device from the web dashboard. Key-gated like the other dashboard
@@ -505,7 +520,9 @@ app.post("/v1/monitor-snapshot", auth, asyncRoute(async (req, res) => {
   for (const d of doses) {
     if (!d.occurrenceId || !Number.isFinite(Number(d.scheduledAt))) continue;
     statements.push({
-      sql: `INSERT INTO monitor_doses
+      // OR REPLACE keeps the publish idempotent even if the payload contains a repeated
+      // occurrence_id (dedup safety); a single occurrence can never create a duplicate row.
+      sql: `INSERT OR REPLACE INTO monitor_doses
         (occurrence_id,user_id,medicine_name,dose_text,scheduled_at,scheduled_epoch_day,status,
          taken_at,eligible_at,critical_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       args: [
@@ -519,9 +536,10 @@ app.post("/v1/monitor-snapshot", auth, asyncRoute(async (req, res) => {
   for (const f of foodEvents) {
     if (!f.uuid || !Number.isFinite(Number(f.foodAt))) continue;
     statements.push({
-      sql: `INSERT INTO monitor_food_events (uuid,user_id,food_at,recorded_at,updated_at)
-            VALUES (?,?,?,?,?)`,
-      args: [String(f.uuid), req.device.user_id, Number(f.foodAt), Number(f.recordedAt || f.foodAt), now],
+      // OR REPLACE by uuid = idempotent food sync; the same food event can never duplicate.
+      sql: `INSERT OR REPLACE INTO monitor_food_events (uuid,user_id,food_at,recorded_at,updated_at,gap_minutes)
+            VALUES (?,?,?,?,?,?)`,
+      args: [String(f.uuid), req.device.user_id, Number(f.foodAt), Number(f.recordedAt || f.foodAt), now, Number(f.gapMinutes || 0)],
     });
   }
   await db.batch(statements);
@@ -539,7 +557,7 @@ app.get("/v1/monitor-snapshot", auth, asyncRoute(async (req, res) => {
       args: [req.device.user_id],
     }),
     db.execute({
-      sql: `SELECT uuid,food_at,recorded_at,updated_at FROM monitor_food_events
+      sql: `SELECT uuid,food_at,recorded_at,updated_at,COALESCE(gap_minutes,0) AS gap_minutes FROM monitor_food_events
             WHERE user_id = ? ORDER BY food_at DESC`,
       args: [req.device.user_id],
     }),
@@ -563,6 +581,7 @@ app.get("/v1/monitor-snapshot", auth, asyncRoute(async (req, res) => {
     uuid: f.uuid,
     foodAt: Number(f.food_at),
     recordedAt: Number(f.recorded_at),
+    gapMinutes: Number(f.gap_minutes || 0),
   }));
   const version = Number(metaRows.rows[0]?.version || 0);
   const emergencyContact = String(metaRows.rows[0]?.emergency_contact || "");
@@ -758,11 +777,21 @@ function landingHtml() {
     <p class="muted" style="font-size:13px">The dashboard now includes devices, system health, and sync in one page. Requires an access key.</p>
   </div>
   <div class="card">
+    <div style="display:flex;align-items:center;gap:10px"><span style="font-size:22px">📱</span><b style="font-size:16px">App Preview</b>
+      <span class="pill" style="background:#241F3D;color:var(--purple)">🧪 preview mode</span></div>
+    <p class="muted" style="margin:8px 0 12px">Test the TB MedTrack mobile application directly from your browser — UI, navigation,
+    medication states, food timing, sync and monitoring behaviour — without installing a new APK.
+    <br><span style="font-size:12px">Use the live preview to test the application without installing the APK.</span></p>
+    <a class="btn" href="/preview?device=primary">📱 Primary Device</a>
+    <a class="btn" href="/preview?device=monitor" style="background:#334155;margin-left:8px">👁 Monitoring Device</a>
+  </div>
+  <div class="card">
     <b>Endpoints</b>
     <div class="row"><span>Health</span><span class="muted">/health</span></div>
     <div class="row"><span>Status (JSON)</span><span class="muted">/status</span></div>
     <div class="row"><span>Stats dashboard</span><span class="muted">/stats?key=…</span></div>
     <div class="row"><span>Devices, health &amp; sync</span><span class="muted">/devices?key=…</span></div>
+    <div class="row"><span>App preview (browser)</span><span class="muted">/preview?device=…</span></div>
     <div class="row"><span>Device sync API</span><span class="muted">/v1/*</span></div>
   </div>
   <div class="foot">Made with ❤️ by Harish · TB MedTrack</div>
@@ -1680,6 +1709,676 @@ function devicesHtml() {
   if(!KEY){ document.getElementById("gate").style.display="block"; }
   else { load(); setInterval(load, 30000); }
 </script>
+</body></html>`;
+}
+
+// Client-side logic for the App Preview page (demo data, time simulation, sync sim, and the
+// Primary + Monitoring screen renderers). Kept as a template string so it ships inline.
+const PREVIEW_JS = String.raw`
+// ---------- state ----------
+var params = new URLSearchParams(location.search);
+var S = {
+  device: params.get("device") === "monitor" ? "monitor" : "primary",
+  tab: "today",
+  primaryNav: "home",
+  monitorNav: "home",
+  simTime: null,              // ms, or null = real time
+  cond: "online",
+  primaryVersion: 1851,
+  monitorVersion: 1851,
+  selectedDay: 0,             // offset from today
+  expanded: {},               // dose card expand map
+};
+
+function now(){ return S.simTime != null ? S.simTime : Date.now(); }
+function startOfToday(){ var d=new Date(now()); d.setHours(0,0,0,0); return d.getTime(); }
+function fmtTime(ms){ return new Date(ms).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+function fmtDate(ms){ return new Date(ms).toLocaleDateString([], {weekday:"long",day:"numeric",month:"short"}); }
+function atTime(dayOffset, h, m){ var d=new Date(startOfToday()); d.setDate(d.getDate()+dayOffset); d.setHours(h,m,0,0); return d.getTime(); }
+
+// ---------- demo data ----------
+// Each dose = a time-of-day group of medicines. status auto-derives unless overridden.
+function seed(){
+  return {
+    morningOverride: null, // dose-state override for today's morning dose
+    meds: {
+      morning: [
+        {name:"Bedaquiline", dose:"4 tablets"},
+        {name:"Linezolid", dose:"600 mg"},
+        {name:"Moxifloxacin", dose:"400 mg"},
+        {name:"Pretomanid", dose:"200 mg"},
+      ],
+      night: [
+        {name:"Pyridoxine / Vitamin B6", dose:"25 mg"},
+        {name:"Levofloxacin", dose:"750 mg"},
+        {name:"Clofazimine", dose:"100 mg"},
+        {name:"Cycloserine", dose:"500 mg"},
+        {name:"Ethambutol", dose:"800 mg"},
+      ],
+    },
+    food: [
+      {id:"food-t", t: atTime(0, 17, 3), gap:120},
+      {id:"food-y", t: atTime(-1, 8, 15), gap:120},
+    ],
+    // taken records keyed by "dayOffset:slot:name" for past/taken doses
+    taken: buildTaken(),
+  };
+}
+function buildTaken(){
+  var t={};
+  // past days fully taken (history), plus today's morning taken at 12:10 by default state
+  for(var off=-6; off<=-1; off++){
+    ["morning","night"].forEach(function(slot){
+      DEMO.medsFor(slot).forEach(function(m){ t[off+":"+slot+":"+m.name]= atTime(off, slot==="morning"?10:22, 10); });
+    });
+  }
+  return t;
+}
+var DEMO = {
+  medsFor: function(slot){ return (this._m && this._m[slot]) || []; },
+  _m: null
+};
+
+function reseed(){
+  DEMO._m = { morning:[
+    {name:"Bedaquiline", dose:"4 tablets"},{name:"Linezolid", dose:"600 mg"},
+    {name:"Moxifloxacin", dose:"400 mg"},{name:"Pretomanid", dose:"200 mg"}
+  ], night:[
+    {name:"Pyridoxine / Vitamin B6", dose:"25 mg"},{name:"Levofloxacin", dose:"750 mg"},
+    {name:"Clofazimine", dose:"100 mg"},{name:"Cycloserine", dose:"500 mg"},{name:"Ethambutol", dose:"800 mg"}
+  ]};
+  DATA = seed();
+}
+var DATA;
+
+// dose slot definitions
+var SLOTS = [
+  {slot:"morning", label:"Morning Dose", emoji:"☀️", h:10, m:0},
+  {slot:"night",   label:"Night Dose",   emoji:"🌙", h:22, m:0},
+];
+
+// status of a whole dose group on a given day offset
+function doseStatus(off, slot){
+  var sched = atTime(off, slot==="morning"?10:22, 0);
+  var meds = DEMO.medsFor(slot);
+  // explicit override only applies to today's morning dose
+  if(off===0 && slot==="morning" && DATA.morningOverride){
+    return DATA.morningOverride==="DUE" ? "UPCOMING" : DATA.morningOverride;
+  }
+  var allTaken = meds.every(function(m){ return DATA.taken[off+":"+slot+":"+m.name]; });
+  if(allTaken && meds.length) return "TAKEN";
+  var critical = sched + 60*60000; // 1h grace
+  if(now() >= critical) return "MISSED";
+  if(now() >= sched) return "DUE";
+  return "UPCOMING";
+}
+function medStatus(off, slot, m){
+  if(DATA.taken[off+":"+slot+":"+m.name]) return "TAKEN";
+  var g = doseStatus(off, slot);
+  return g==="MISSED" ? "MISSED" : (g==="DUE"||g==="LATE") ? "DUE" : "UPCOMING";
+}
+function takenAt(off, slot, m){ return DATA.taken[off+":"+slot+":"+m.name] || null; }
+
+function statusMeta(s){
+  if(s==="TAKEN") return {c:"g", bg:"bg-g", t:"TAKEN", dot:"var(--green)"};
+  if(s==="MISSED") return {c:"r", bg:"bg-r", t:"NOT TAKEN", dot:"var(--red)"};
+  if(s==="DUE") return {c:"y", bg:"bg-y", t:"DUE", dot:"var(--yellow)"};
+  if(s==="LATE") return {c:"y", bg:"bg-y", t:"LATE", dot:"var(--yellow)"};
+  return {c:"y", bg:"bg-y", t:"UPCOMING", dot:"var(--yellow)"};
+}
+
+// next not-taken medicine across today+future
+function nextMedicine(){
+  var best=null;
+  for(var off=0; off<=7; off++){
+    SLOTS.forEach(function(sl){
+      var sched=atTime(off, sl.h, sl.m);
+      if(sched < now()-60000) return;
+      DEMO.medsFor(sl.slot).forEach(function(m){
+        if(medStatus(off, sl.slot, m)!=="TAKEN"){
+          if(!best || sched<best.sched) best={sched:sched, name:m.name, dose:m.dose, slot:sl.slot};
+        }
+      });
+    });
+    if(best) break;
+  }
+  return best;
+}
+function countdown(target){
+  var diff=target-now(); if(diff<=0) return "Due now";
+  var mins=Math.floor(diff/60000), h=Math.floor(mins/60), m=mins%60;
+  return h>0 ? "In "+h+"h "+m+"m" : "In "+m+"m";
+}
+
+// ---------- condition → connection ----------
+function connBadge(){
+  var b=document.getElementById("connBadge");
+  if(S.cond==="offline"||S.cond==="apierr"||S.cond==="syncerr"){ b.style.background="#3A1616"; b.style.color="var(--red)"; b.textContent="🔴 "+(S.cond==="offline"?"Offline":S.cond==="apierr"?"API error":"Sync error"); }
+  else if(S.cond==="slow"){ b.style.background="#3A2C10"; b.style.color="var(--yellow)"; b.textContent="🟡 Slow network"; }
+  else { b.style.background="#14321F"; b.style.color="var(--green)"; b.textContent="🟢 Connected"; }
+}
+function syncPhaseLabel(){
+  if(S.cond==="offline") return {t:"Offline", cls:"r", dot:"var(--red)"};
+  if(S.cond==="slow") return {t:"Syncing…", cls:"y", dot:"var(--yellow)"};
+  if(S.cond==="syncerr"||S.cond==="apierr") return {t:"Sync error", cls:"r", dot:"var(--red)"};
+  if(S.monitorVersion < S.primaryVersion) return {t:"Behind", cls:"y", dot:"var(--yellow)"};
+  return {t:"Up to date", cls:"g", dot:"var(--green)"};
+}
+
+// ---------- rendering ----------
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+function pill(s){ var m=statusMeta(s); return '<span class="pill2 '+m.bg+' '+m.c+'"><span class="dot" style="background:'+m.dot+'"></span>'+m.t+'</span>'; }
+
+function statusBar(){
+  return '<div class="sbar"><span>'+fmtTime(now())+'</span><span>▮▮▮ 📶 🔋 78%</span></div>';
+}
+
+// ----- PRIMARY device screen -----
+function primaryScreen(){
+  var nav = S.primaryNav;
+  var body;
+  if(nav==="home") body = primaryHome();
+  else if(nav==="schedule") body = scheduleBody(true);
+  else if(nav==="stats") body = statsBody();
+  else if(nav==="settings") body = settingsBody(true);
+  else body = primaryHome();
+  var fab = '<div class="fab" title="Add medicine (primary only)">+</div>';
+  return '<div class="screen">'+statusBar()+
+    '<div class="appscroll">'+body+'</div>'+
+    (nav==="home"?fab:'')+
+    navBar(true, nav)+'</div>';
+}
+function primaryHome(){
+  var d=new Date(now());
+  var mMeds=DEMO.medsFor("morning"), nMeds=DEMO.medsFor("night");
+  var takenCount = mMeds.filter(function(m){return medStatus(0,"morning",m)==="TAKEN";}).length
+                 + nMeds.filter(function(m){return medStatus(0,"night",m)==="TAKEN";}).length;
+  var total=mMeds.length+nMeds.length;
+  var nx=nextMedicine();
+  return ''+
+  '<div class="c"><div class="row2"><div><div style="font-size:20px;font-weight:800">Today</div>'+
+    '<div class="mu" style="font-size:12px">'+d.toLocaleDateString([], {day:"numeric",month:"long",year:"numeric"})+'</div></div>'+
+    '<div style="text-align:right"><div style="font-weight:700;font-size:13px">2 Doses</div>'+
+    '<div class="p" style="font-weight:800">'+takenCount+'/'+total+'</div><div class="mu" style="font-size:9px">Taken</div></div></div>'+
+    doseSummary(0,"morning")+doseSummary(0,"night")+'</div>'+
+  (nx? '<div class="c"><div class="row2"><b style="font-size:12px">⏰ NEXT MEDICINE</b><span class="pill2 bg-p p">'+countdown(nx.sched)+'</span></div>'+
+    '<div style="margin-top:6px;font-weight:700">'+esc(nx.name)+'</div><div class="mu" style="font-size:12px">'+fmtTime(nx.sched)+' • '+esc(nx.dose)+'</div></div>' : '')+
+  '<div class="c"><b style="font-size:12px">🍽️ FOOD</b><div class="mu" style="font-size:12px;margin:6px 0">Record a meal to recalculate medicine timing.</div>'+
+    '<button class="btn block" onclick="foodTaken()">FOOD TAKEN</button>'+ foodInfo() +'</div>'+
+  calendarCard()+
+  '<div class="tabs" id="ptabs">'+tabBtn("today","Today")+tabBtn("schedule","Schedule")+tabBtn("history","History")+tabBtn("food","Food")+'</div>'+
+  tabBody(true);
+}
+
+function doseSummary(off, slot){
+  var sl=SLOTS.find(function(x){return x.slot===slot;});
+  var st=doseStatus(off, slot);
+  var meds=DEMO.medsFor(slot);
+  var ta = meds.map(function(m){return takenAt(off,slot,m);}).filter(Boolean).sort().pop();
+  var sub = st==="TAKEN"&&ta ? "Taken at "+fmtTime(ta) : meds.length+" medicines";
+  return '<div class="c2 row2"><div style="display:flex;gap:8px;align-items:center"><span style="font-size:16px">'+sl.emoji+'</span>'+
+    '<div><div style="font-weight:700;font-size:13px">'+sl.label+'</div><div class="mu" style="font-size:11px">'+fmtTime(atTime(off,sl.h,sl.m))+'</div></div></div>'+
+    '<div style="text-align:right">'+pill(st)+'<div class="mu" style="font-size:9px;margin-top:3px">'+sub+'</div></div></div>';
+}
+
+// expandable dose card (used in Today/History tabs + monitor)
+function doseCard(off, slot, primary){
+  var sl=SLOTS.find(function(x){return x.slot===slot;});
+  var st=doseStatus(off, slot);
+  var key=off+":"+slot;
+  var open=!!S.expanded[key];
+  var meds=DEMO.medsFor(slot);
+  var ta = meds.map(function(m){return takenAt(off,slot,m);}).filter(Boolean).sort().pop();
+  var head='<div class="row2" onclick="toggleDose(\''+key+'\')" style="cursor:pointer">'+
+    '<div style="display:flex;gap:8px;align-items:center"><span style="font-size:16px">'+sl.emoji+'</span>'+
+    '<div><div style="font-weight:700;font-size:13px">'+sl.label+'</div><div class="mu" style="font-size:11px">'+fmtTime(atTime(off,sl.h,sl.m))+'</div></div></div>'+
+    '<div style="display:flex;gap:6px;align-items:center">'+pill(st)+'<span class="mu">'+(open?'⌃':'⌄')+'</span></div></div>';
+  var rows='';
+  if(open){
+    rows='<div style="margin-top:8px">'+meds.map(function(m){
+      var ms=medStatus(off,slot,m); var t=takenAt(off,slot,m);
+      var canTake = primary && off===0 && ms!=="TAKEN";
+      return '<div class="row2" style="padding:6px 0;border-top:1px solid var(--line)">'+
+        '<div style="display:flex;gap:8px;align-items:center"><span class="dot" style="background:'+statusMeta(ms).dot+'"></span>'+
+        '<div><div style="font-size:12px;font-weight:600">'+esc(m.name)+'</div><div class="mu" style="font-size:10px">'+esc(m.dose)+'</div></div></div>'+
+        '<div style="display:flex;gap:6px;align-items:center">'+(t?'<span class="mu" style="font-size:10px">'+fmtTime(t)+'</span>':'')+pill(ms)+
+        (canTake?'<button class="chip" style="padding:3px 8px" onclick="takeMed(0,\''+slot+'\',\''+esc(m.name)+'\')">Take</button>':'')+'</div></div>';
+    }).join('')+'</div>';
+  }
+  return '<div class="c">'+head+rows+'</div>';
+}
+
+function tabBtn(t, label){ return '<button class="'+(S.tab===t?'on':'')+'" onclick="setTab(\''+t+'\')">'+label+'</button>'; }
+function tabBody(primary){
+  if(S.tab==="today"){
+    return doseCard(0,"morning",primary)+doseCard(0,"night",primary)+
+      (primary?'<div class="c"><button class="btn block" onclick="markMorningTaken()">MEDICINE TAKEN (morning dose)</button></div>':'');
+  }
+  if(S.tab==="schedule") return scheduleBody(primary);
+  if(S.tab==="history") return historyBody(primary);
+  if(S.tab==="food") return foodBody();
+  return '';
+}
+
+function scheduleBody(primary){
+  var out='';
+  for(var off=0; off<=1; off++){
+    out+='<div class="mu" style="font-size:11px;font-weight:700;margin:8px 0 4px">'+(off===0?"TODAY":"TOMORROW")+'</div>';
+    SLOTS.forEach(function(sl){
+      var st=doseStatus(off, sl.slot);
+      out+='<div class="c row2"><div><div style="font-weight:700;font-size:13px">'+fmtTime(atTime(off,sl.h,sl.m))+'</div>'+
+        '<div class="mu" style="font-size:11px">'+sl.emoji+' '+sl.label+'</div></div>'+pill(st)+'</div>';
+    });
+  }
+  return out;
+}
+function historyBody(primary){
+  var out='';
+  for(var off=0; off>=-4; off--){
+    var lbl = off===0?"TODAY":off===-1?"YESTERDAY":new Date(atTime(off,0,0)).toLocaleDateString([], {day:"numeric",month:"short"}).toUpperCase();
+    out+='<div class="mu" style="font-size:11px;font-weight:700;margin:8px 0 4px">'+lbl+'</div>';
+    out+=doseCard(off,"morning",primary)+doseCard(off,"night",primary);
+  }
+  return out;
+}
+function foodBody(){
+  return '<div class="mu" style="font-size:11px;font-weight:700;margin:8px 0 4px">FOOD HISTORY</div>'+
+    DATA.food.map(function(f){
+      var elig=f.t+f.gap*60000;
+      return '<div class="c"><div class="row2"><div style="display:flex;gap:8px;align-items:center">🍽️<div>'+
+        '<div style="font-weight:700;font-size:13px">Food taken</div><div class="mu" style="font-size:11px">'+fmtDate(f.t)+'</div></div></div>'+
+        '<b>'+fmtTime(f.t)+'</b></div>'+
+        '<div class="c2"><div class="row2 mu" style="font-size:11px"><span>Food taken</span><b style="color:var(--text)">'+fmtTime(f.t)+'</b></div>'+
+        '<div class="row2 mu" style="font-size:11px"><span>Medicine interval</span><b style="color:var(--text)">'+(f.gap/60)+'h</b></div>'+
+        '<div class="row2 mu" style="font-size:11px"><span>Medicine eligible</span><b style="color:var(--text)">'+fmtTime(elig)+'</b></div></div></div>';
+    }).join('');
+}
+function statsBody(){
+  var m=DEMO.medsFor("morning"), n=DEMO.medsFor("night");
+  var taken=m.filter(function(x){return medStatus(0,"morning",x)==="TAKEN";}).length+n.filter(function(x){return medStatus(0,"night",x)==="TAKEN";}).length;
+  return '<div class="mu" style="font-size:11px;font-weight:700;margin:8px 0 4px">OVERVIEW</div>'+
+    '<div class="c"><div class="row2 mu" style="font-size:12px"><span>Doses today</span><b style="color:var(--text)">2</b></div>'+
+    '<div class="row2 mu" style="font-size:12px"><span>Medicines taken today</span><b style="color:var(--text)">'+taken+' / '+(m.length+n.length)+'</b></div>'+
+    '<div class="row2 mu" style="font-size:12px"><span>Adherence (7d)</span><b class="g">92%</b></div>'+
+    '<div class="row2 mu" style="font-size:12px"><span>Food records</span><b style="color:var(--text)">'+DATA.food.length+'</b></div></div>';
+}
+function settingsBody(primary){
+  var sp=syncPhaseLabel();
+  return '<div class="mu" style="font-size:11px;font-weight:700;margin:8px 0 4px">SETTINGS</div>'+
+    '<div class="c"><div class="row2"><b style="font-size:13px">'+(primary?"Primary Device":"Monitoring Device")+'</b>'+
+    '<span class="pill2 bg-g g"><span class="dot" style="background:var(--green)"></span>Connected</span></div>'+
+    '<div class="c2"><div class="row2 mu" style="font-size:12px"><span>Role</span><b style="color:var(--text)">'+(primary?"PRIMARY":"MONITORING")+'</b></div>'+
+    '<div class="row2 mu" style="font-size:12px"><span>Cloud sync</span><b class="g">Always active</b></div>'+
+    '<div class="row2 mu" style="font-size:12px"><span>Cloud version</span><b style="color:var(--text)">#'+S.primaryVersion+'</b></div>'+
+    '<div class="row2 mu" style="font-size:12px"><span>Local version</span><b style="color:var(--text)">#'+(primary?S.primaryVersion:S.monitorVersion)+'</b></div></div>'+
+    (primary?'<div class="c2"><div class="row2 mu" style="font-size:12px"><span>Authorized devices</span><b style="color:var(--text)">2</b></div></div>':'')+
+    '</div>';
+}
+function foodInfo(){
+  var f=DATA.food[0]; if(!f) return '';
+  var elig=f.t+f.gap*60000;
+  return '<div class="c2 mu" style="font-size:11px"><div class="row2"><span>Last food</span><b style="color:var(--text)">'+fmtTime(f.t)+'</b></div>'+
+    '<div class="row2"><span>Medicine eligible</span><b style="color:var(--text)">'+fmtTime(elig)+'</b></div></div>';
+}
+
+function calendarCard(){
+  var base=new Date(now()); var y=base.getFullYear(), mo=base.getMonth();
+  var first=new Date(y,mo,1); var lead=first.getDay(); var days=new Date(y,mo+1,0).getDate();
+  var todayD=base.getDate();
+  var cells='<div class="cal">'+["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(function(h){return '<div class="h">'+h+'</div>';}).join('');
+  for(var i=0;i<lead;i++) cells+='<div></div>';
+  for(var dnum=1; dnum<=days; dnum++){
+    var off=dnum-todayD;
+    var dotColor="var(--muted)";
+    if(off>=-6 && off<=7){
+      var ms=doseStatus(off,"morning"), ns=doseStatus(off,"night");
+      if(ms==="TAKEN"&&ns==="TAKEN") dotColor="var(--green)";
+      else if(ms==="MISSED"||ns==="MISSED") dotColor="var(--red)";
+      else dotColor="var(--yellow)";
+    }
+    var sel = off===S.selectedDay ? " sel" : "";
+    var tod = dnum===todayD ? " today" : "";
+    cells+='<div class="d'+sel+tod+'" onclick="selectDay('+off+')"><span>'+dnum+'</span>'+
+      '<span class="dot" style="background:'+dotColor+';margin-top:2px"></span></div>';
+  }
+  cells+='</div>';
+  return '<div class="c"><div class="row2"><b style="font-size:13px">'+base.toLocaleDateString([], {month:"long",year:"numeric"})+'</b>'+
+    '<span class="pill2 bg-p p" onclick="selectDay(0)" style="cursor:pointer">Today</span></div>'+cells+'</div>';
+}
+
+// ----- MONITORING device screen (read-only) -----
+function monitorScreen(){
+  var nav=S.monitorNav, body;
+  if(nav==="settings") body=settingsBody(false);
+  else if(nav==="stats") body=statsBody();
+  else body=monitorHome();
+  return '<div class="screen">'+statusBar()+'<div class="appscroll">'+body+'</div>'+navBar(false, nav)+'</div>';
+}
+function monitorHome(){
+  var sp=syncPhaseLabel();
+  var mMeds=DEMO.medsFor("morning"), nMeds=DEMO.medsFor("night");
+  var takenCount=mMeds.filter(function(m){return medStatus(0,"morning",m)==="TAKEN";}).length+nMeds.filter(function(m){return medStatus(0,"night",m)==="TAKEN";}).length;
+  var total=mMeds.length+nMeds.length;
+  var nx=nextMedicine();
+  var behind = S.monitorVersion < S.primaryVersion;
+  return ''+
+  '<div class="c"><div class="row2"><b style="font-size:12px">☁ CLOUD SYNC</b>'+
+    '<span class="pill2 bg-'+sp.cls+' '+sp.cls+'"><span class="dot" style="background:'+sp.dot+'"></span>'+sp.t+'</span></div>'+
+    '<div class="c2 mu" style="font-size:11px"><div class="row2"><span>Last downloaded</span><b style="color:var(--text)">'+fmtTime(now())+'</b></div>'+
+    '<div class="row2"><span>Cloud version</span><b style="color:var(--text)">#'+S.primaryVersion+'</b></div>'+
+    '<div class="row2"><span>Local version</span><b style="color:var(--text)">#'+S.monitorVersion+'</b></div></div>'+
+    '<button class="btn block" style="margin-top:8px" onclick="monitorCheckSync()">CHECK SYNC</button></div>'+
+  '<div class="c"><div class="row2"><div><div style="font-size:20px;font-weight:800">Today</div>'+
+    '<div class="mu" style="font-size:12px">'+new Date(now()).toLocaleDateString([], {day:"numeric",month:"long",year:"numeric"})+'</div></div>'+
+    '<div style="text-align:right"><div class="p" style="font-weight:800;font-size:16px">'+takenCount+'/'+total+'</div><div class="mu" style="font-size:9px">Taken</div></div></div>'+
+    doseSummary(0,"morning")+doseSummary(0,"night")+'</div>'+
+  (nx?'<div class="c"><div class="row2"><b style="font-size:12px">⏰ NEXT MEDICINE</b><span class="pill2 bg-p p">'+countdown(nx.sched)+'</span></div>'+
+    '<div style="margin-top:6px;font-weight:700">'+esc(nx.name)+'</div><div class="mu" style="font-size:12px">'+fmtTime(nx.sched)+' • '+esc(nx.dose)+'</div></div>':'')+
+  calendarCard()+
+  '<div class="tabs">'+tabBtn("today","Today")+tabBtn("schedule","Schedule")+tabBtn("history","History")+tabBtn("food","Food")+'</div>'+
+  tabBody(false)+
+  '<div class="mu" style="font-size:10px;text-align:center;margin-top:8px">Read-only monitor · data comes from the primary device</div>';
+}
+
+function navBar(primary, nav){
+  var items = primary
+    ? [["home","🏠","Home"],["schedule","🗓","Schedule"],["stats","📊","Stats"],["settings","⚙️","Settings"]]
+    : [["home","🏠","Home"],["schedule","🗓","Schedule"],["stats","📊","Stats"],["history","🕘","History"],["settings","⚙️","Settings"]];
+  return '<div class="navbar">'+items.map(function(it){
+    var on = nav===it[0] ? " on":"";
+    return '<div class="navitem'+on+'" onclick="setNav(\''+(primary?"primary":"monitor")+'\',\''+it[0]+'\')"><span class="ic">'+it[1]+'</span><span>'+it[2]+'</span></div>';
+  }).join('')+'</div>';
+}
+
+// ---------- top-level render ----------
+function phone(kind){
+  var tag = kind==="primary" ? "📱 Primary Device" : "👁 Monitoring Device";
+  var screen = kind==="primary" ? primaryScreen() : monitorScreen();
+  return '<div class="devwrap"><div class="devtag">'+tag+'</div>'+
+    '<div class="phone"><div class="notch"></div><div class="cam"></div>'+screen+'</div></div>';
+}
+function render(){
+  if(!DATA) reseed();
+  // segmented control
+  document.querySelectorAll("#seg button").forEach(function(b){ b.classList.toggle("on", b.dataset.d===S.device); });
+  // dose-state chips
+  document.querySelectorAll("#doseState .chip").forEach(function(b){ b.classList.toggle("on", b.dataset.s===(DATA.morningOverride||"")); });
+  // condition chips
+  document.querySelectorAll("#conds .chip").forEach(function(b){ b.classList.toggle("on", b.dataset.c===S.cond); });
+  document.getElementById("pver").textContent="#"+S.primaryVersion;
+  document.getElementById("mver").textContent="#"+S.monitorVersion;
+  var sp=syncPhaseLabel();
+  document.getElementById("syncStat").className="pill2 bg-"+sp.cls+" "+sp.cls;
+  document.getElementById("syncStat").innerHTML='<span class="dot" style="background:'+sp.dot+'"></span>'+sp.t;
+  connBadge();
+  // time label
+  document.getElementById("timeNow").textContent = S.simTime!=null
+    ? "🧪 Simulated · "+new Date(S.simTime).toLocaleDateString([], {day:"numeric",month:"short"})+" • "+fmtTime(S.simTime)
+    : "Real time · "+fmtTime(Date.now());
+  // stage
+  var live=document.getElementById("liveSync").checked;
+  var stage=document.getElementById("stage");
+  if(live) stage.innerHTML = phone("primary")+phone("monitor");
+  else stage.innerHTML = phone(S.device);
+}
+
+// ---------- interactions ----------
+function setDevice(d){ S.device=d; S.tab="today"; var u=new URL(location); u.searchParams.set("device",d); history.replaceState(null,"",u); render(); }
+function setTab(t){ S.tab=t; render(); }
+function setNav(kind,n){ if(kind==="primary") S.primaryNav=n; else S.monitorNav=n; if(n!=="home") S.tab= (n==="history")?"history":(n==="schedule")?"schedule":S.tab; render(); }
+function toggleDose(key){ S.expanded[key]=!S.expanded[key]; render(); }
+function selectDay(off){ S.selectedDay=off; render(); }
+
+function takeMed(off, slot, name){ DATA.taken[off+":"+slot+":"+name]=now(); bumpPrimary(); toast("🟢 "+name+" marked taken"); render(); }
+function markMorningTaken(){ DATA.morningOverride=null; DEMO.medsFor("morning").forEach(function(m){ DATA.taken["0:morning:"+m.name]=now(); }); bumpPrimary(); toast("🟢 Morning dose taken"); render(); }
+function foodTaken(){ DATA.food.unshift({id:"food-"+Date.now(), t:now(), gap:120}); bumpPrimary(); toast("🍽️ Food recorded — eligibility updated"); render(); }
+function setDoseState(s){ DATA.morningOverride = (DATA.morningOverride===s? null : s); if(s==="TAKEN"){ DEMO.medsFor("morning").forEach(function(m){ DATA.taken["0:morning:"+m.name]=now(); }); } render(); }
+
+function bumpPrimary(){ S.primaryVersion++; if(!document.getElementById("liveSync").checked){ /* monitor stays behind until push */ } }
+
+function applyTime(){
+  var d=document.getElementById("simDate").value, t=document.getElementById("simTime").value;
+  if(!d||!t){ toast("Pick a date and time"); return; }
+  S.simTime=new Date(d+"T"+t).getTime(); render();
+}
+function resetTime(){ S.simTime=null; render(); }
+
+function setCond(c){ S.cond= (S.cond===c? "online" : c); render(); }
+
+function pushUpdate(){
+  if(S.cond==="offline"||S.cond==="syncerr"||S.cond==="apierr"){ toast("Cannot sync in this condition"); return; }
+  S.monitorVersion=S.primaryVersion; toast("⬆ Pushed · monitoring synced"); render();
+}
+function createPending(){ S.primaryVersion++; toast("Monitoring is now behind (#"+S.monitorVersion+" < #"+S.primaryVersion+")"); render(); }
+function monitorCheckSync(){
+  if(S.cond==="offline"){ toast("🔴 Offline"); return; }
+  if(S.cond==="syncerr"||S.cond==="apierr"){ toast("🔴 Sync failed"); return; }
+  S.monitorVersion=S.primaryVersion; toast("🟢 Up to date"); render();
+}
+
+function runSyncTest(){
+  var ul=document.getElementById("syncSteps"); ul.innerHTML="";
+  var steps=["Event created","Uploaded","Cloud updated","Monitoring detected update","Monitoring downloaded update","Devices synchronized"];
+  DATA.taken["0:morning:Bedaquiline"]=now(); S.primaryVersion++;
+  var i=0;
+  var timer=setInterval(function(){
+    if(i<steps.length){ var li=document.createElement("li"); li.className="ok"; li.textContent="✓ "+steps[i]; ul.appendChild(li);
+      if(i===4) S.monitorVersion=S.primaryVersion;
+      i++; render();
+    } else { clearInterval(timer); toast("✓ Devices synchronized"); }
+  }, 420);
+}
+
+function notify(kind){
+  var map={remind:["💊","Medication reminder","Your morning TB medicines are due at 10:00 AM."],
+    due:["⏰","Medicine due now","Morning dose is due. Tap to view."],
+    critical:["🚨","Critical: medicine not taken","Morning dose is overdue. Please take it now."],
+    taken:["✓","Medication recorded","Morning dose recorded as taken."]};
+  var n=map[kind]; var area=document.getElementById("notifArea");
+  area.innerHTML='<div class="notif"><span class="ic">'+n[0]+'</span><div><div style="font-weight:700;font-size:12px">'+n[1]+'</div><div class="mu" style="font-size:11px">'+n[2]+'</div></div></div>';
+}
+
+function toast(m){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"; clearTimeout(t._t); t._t=setTimeout(function(){t.className="toast";},2200); }
+function reloadPreview(){ render(); toast("Reloaded"); }
+function resetPreview(){ reseed(); S.simTime=null; S.cond="online"; S.primaryVersion=1851; S.monitorVersion=1851; S.expanded={}; S.selectedDay=0; render(); toast("Preview reset"); }
+function toggleFs(){ document.getElementById("wrap").classList.toggle("fs"); render(); }
+document.addEventListener("keydown", function(e){ if(e.key==="Escape") document.getElementById("wrap").classList.remove("fs"); });
+
+// live countdown / clock tick
+setInterval(function(){ render(); }, 1000);
+reseed(); render();
+`;
+
+// --- Interactive browser App Preview (demo-data mock of the Android app) ---
+// NOTE: The Android app is native Kotlin/Compose and cannot literally run in a browser, so this
+// is a faithful HTML/JS re-creation for testing UI/navigation/states/sync. It uses demo data only
+// and never touches the real database.
+function previewHtml() {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TB MedTrack — App Preview</title>
+<style>
+  :root{
+    --bg:#0B1020;--bg2:#121A32;--panel:#131A30;--card:#161C33;--card2:#1E2643;--line:#2C3556;
+    --text:#EEF1FA;--muted:#94A3B8;--purple:#8B5CF6;--indigo:#6366F1;
+    --green:#22C55E;--yellow:#F59E0B;--red:#EF4444;--radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:linear-gradient(160deg,var(--bg2),var(--bg));color:var(--text);min-height:100vh;font-size:14px}
+  a{color:inherit;text-decoration:none}
+  button{font-family:inherit;cursor:pointer;border:none}
+  .wrap{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+  .top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand .logo{width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--indigo),var(--purple));
+    display:flex;align-items:center;justify-content:center;font-size:19px}
+  h1{font-size:20px;margin:0}
+  .muted{color:var(--muted)}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700}
+  .badge.prev{background:#241F3D;color:var(--purple)}
+  .seg{display:inline-flex;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px}
+  .seg button{background:transparent;color:var(--muted);padding:8px 16px;border-radius:9px;font-weight:600;font-size:13px}
+  .seg button.on{background:var(--purple);color:#fff}
+  .layout{display:grid;grid-template-columns:320px 1fr;gap:18px;align-items:start}
+  @media(max-width:900px){.layout{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:14px}
+  .panel h3{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+  .ctl-row{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{background:var(--card2);border:1px solid var(--line);color:var(--text);padding:7px 12px;border-radius:9px;font-size:12px;font-weight:600}
+  .chip.on{background:var(--purple);border-color:var(--purple);color:#fff}
+  .chip.warn.on{background:var(--yellow);border-color:var(--yellow);color:#1b1300}
+  .chip.err.on{background:var(--red);border-color:var(--red);color:#fff}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--purple);color:#fff;
+    font-weight:700;font-size:13px;padding:9px 14px;border-radius:10px}
+  .btn.ghost{background:var(--card2);border:1px solid var(--line)}
+  .btn.block{width:100%}
+  .in{width:100%;background:#0E1526;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px;font-size:13px}
+  label.lbl{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
+  .stage{display:flex;flex-wrap:wrap;gap:22px;justify-content:center;align-items:flex-start}
+  .devwrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .devtag{font-size:12px;color:var(--muted);font-weight:700}
+  /* Phone frame */
+  .phone{width:320px;max-width:92vw;aspect-ratio:9/19;background:#05070E;border-radius:34px;padding:10px;
+    box-shadow:0 20px 60px rgba(0,0,0,.55),0 0 0 2px #1b2236;position:relative}
+  .phone .notch{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:110px;height:22px;background:#05070E;border-radius:0 0 14px 14px;z-index:6}
+  .phone .cam{position:absolute;top:19px;left:50%;transform:translateX(-50%);width:7px;height:7px;border-radius:50%;background:#1c2740;z-index:7}
+  .screen{position:relative;width:100%;height:100%;background:linear-gradient(160deg,#121A32,#0B1020);border-radius:26px;overflow:hidden;display:flex;flex-direction:column}
+  .sbar{display:flex;justify-content:space-between;align-items:center;padding:8px 16px 4px;font-size:11px;color:#cdd5ea;flex-shrink:0}
+  .appscroll{flex:1;overflow-y:auto;padding:6px 12px 12px}
+  .appscroll::-webkit-scrollbar{width:0}
+  .navbar{flex-shrink:0;display:flex;justify-content:space-around;align-items:center;background:#131A30;border-top:1px solid var(--line);padding:7px 4px 9px}
+  .navitem{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:9px;color:var(--muted)}
+  .navitem.on{color:var(--indigo)}
+  .navitem .ic{font-size:16px}
+  .fab{position:absolute;bottom:52px;left:50%;transform:translateX(-50%);width:52px;height:52px;border-radius:50%;
+    background:var(--indigo);display:flex;align-items:center;justify-content:center;font-size:26px;color:#fff;
+    box-shadow:0 6px 18px rgba(99,102,241,.5);z-index:5}
+  /* app cards */
+  .c{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:10px}
+  .c2{background:var(--card2);border-radius:12px;padding:10px;margin-top:8px}
+  .pill2{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:999px;font-size:10px;font-weight:800}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .g{color:var(--green)} .y{color:var(--yellow)} .r{color:var(--red)} .p{color:var(--purple)} .mu{color:var(--muted)}
+  .bg-g{background:rgba(34,197,94,.16)} .bg-y{background:rgba(245,158,11,.16)} .bg-r{background:rgba(239,68,68,.16)} .bg-p{background:rgba(139,92,246,.16)}
+  .row2{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .tabs{display:flex;background:var(--card);border-radius:11px;padding:3px;margin:8px 0}
+  .tabs button{flex:1;background:transparent;color:var(--muted);font-size:12px;font-weight:600;padding:7px;border-radius:8px}
+  .tabs button.on{background:var(--indigo);color:#fff}
+  .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-top:6px}
+  .cal .h{font-size:9px;color:var(--muted);text-align:center;padding:2px 0}
+  .cal .d{aspect-ratio:1;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:11px;cursor:pointer}
+  .cal .d.sel{outline:1.5px solid var(--purple);background:rgba(139,92,246,.2)}
+  .cal .d.today{color:var(--purple);font-weight:800}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#12331F;color:#EAFBF0;padding:10px 16px;
+    border-radius:10px;font-weight:700;z-index:200;display:none;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .toast.show{display:block}
+  .notif{margin:8px 0;padding:10px;border-radius:12px;background:#0E1526;border:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+  .notif .ic{font-size:18px}
+  .steps{list-style:none;padding:0;margin:8px 0 0;font-size:12px}
+  .steps li{padding:4px 0;color:var(--muted)}
+  .steps li.ok{color:var(--green)}
+  .fs .layout{grid-template-columns:1fr}
+  .fs .controls{display:none}
+  .fs .phone{width:360px}
+  .verbadge{font-size:11px;color:var(--muted)}
+</style></head>
+<body>
+<div class="wrap" id="wrap">
+  <div class="top">
+    <div class="brand"><div class="logo">💊</div><div><h1>TB MedTrack — App Preview</h1>
+      <div class="muted" style="font-size:12px">Browser test environment · <span class="badge prev">🧪 Preview Mode</span></div></div></div>
+    <div style="flex:1"></div>
+    <div class="seg" id="seg">
+      <button data-d="primary" onclick="setDevice('primary')">📱 Primary</button>
+      <button data-d="monitor" onclick="setDevice('monitor')">👁 Monitoring</button>
+    </div>
+  </div>
+
+  <div class="panel" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <b style="font-size:13px">APP PREVIEW</b>
+    <span id="connBadge" class="badge" style="background:#14321F;color:var(--green)">🟢 Connected</span>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer">
+      <input type="checkbox" id="liveSync" onchange="render()"> Live Sync Preview (two devices)</label>
+    <div style="flex:1"></div>
+    <button class="btn ghost" onclick="reloadPreview()">↻ Reload</button>
+    <button class="btn ghost" onclick="resetPreview()">⟲ Reset</button>
+    <button class="btn ghost" onclick="toggleFs()">⛶ Fullscreen</button>
+    <span class="muted" style="font-size:11px;width:100%">Preview data only — never modifies real medication history.</span>
+  </div>
+
+  <div class="layout">
+    <!-- Developer controls -->
+    <div class="controls">
+      <div class="panel">
+        <h3>🧪 Simulated Time</h3>
+        <div id="timeNow" class="muted" style="font-size:13px;margin-bottom:8px">Real time</div>
+        <label class="lbl">Date</label><input class="in" type="date" id="simDate">
+        <label class="lbl">Time</label><input class="in" type="time" id="simTime">
+        <div class="ctl-row" style="margin-top:10px">
+          <button class="btn" onclick="applyTime()">Apply</button>
+          <button class="btn ghost" onclick="resetTime()">Reset to Real Time</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Dose State (morning dose)</h3>
+        <div class="ctl-row" id="doseState">
+          <button class="chip" data-s="UPCOMING" onclick="setDoseState('UPCOMING')">Upcoming</button>
+          <button class="chip" data-s="DUE" onclick="setDoseState('DUE')">Due</button>
+          <button class="chip" data-s="TAKEN" onclick="setDoseState('TAKEN')">Taken</button>
+          <button class="chip" data-s="LATE" onclick="setDoseState('LATE')">Late</button>
+          <button class="chip" data-s="MISSED" onclick="setDoseState('MISSED')">Missed</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Sync Simulator</h3>
+        <div class="row2"><span class="muted">Primary</span><span class="verbadge" id="pver">#1851</span></div>
+        <div class="row2"><span class="muted">Monitoring</span><span class="verbadge" id="mver">#1851</span></div>
+        <div class="row2"><span class="muted">Status</span><span id="syncStat" class="pill2 bg-g g"><span class="dot g" style="background:var(--green)"></span>Synced</span></div>
+        <div class="ctl-row" style="margin-top:10px">
+          <button class="btn" onclick="pushUpdate()">Push Update</button>
+          <button class="btn ghost" onclick="createPending()">Create Pending</button>
+        </div>
+        <button class="btn block" style="margin-top:8px" onclick="runSyncTest()">▶ Run Sync Test</button>
+        <ul class="steps" id="syncSteps"></ul>
+      </div>
+
+      <div class="panel">
+        <h3>Test Conditions</h3>
+        <div class="ctl-row" id="conds">
+          <button class="chip" data-c="online" onclick="setCond('online')">Online</button>
+          <button class="chip err" data-c="offline" onclick="setCond('offline')">Offline</button>
+          <button class="chip warn" data-c="slow" onclick="setCond('slow')">Slow Network</button>
+          <button class="chip err" data-c="syncerr" onclick="setCond('syncerr')">Sync Error</button>
+          <button class="chip err" data-c="apierr" onclick="setCond('apierr')">API Error</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Notification Simulator</h3>
+        <div class="ctl-row">
+          <button class="chip" onclick="notify('remind')">10 AM Reminder</button>
+          <button class="chip" onclick="notify('due')">Medicine Due</button>
+          <button class="chip" onclick="notify('critical')">Critical Alert</button>
+          <button class="chip" onclick="notify('taken')">Medicine Taken</button>
+        </div>
+        <div id="notifArea"></div>
+      </div>
+    </div>
+
+    <!-- Phone stage -->
+    <div class="stage" id="stage"></div>
+  </div>
+  <div class="foot muted" style="text-align:center;font-size:11px;margin-top:20px">
+    🧪 Faithful browser re-creation for testing. The production app is the native Android APK.
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>${PREVIEW_JS}</script>
 </body></html>`;
 }
 
