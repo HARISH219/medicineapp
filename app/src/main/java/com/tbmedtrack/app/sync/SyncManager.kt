@@ -1,11 +1,17 @@
 package com.tbmedtrack.app.sync
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.tbmedtrack.app.data.db.AppDatabase
+import com.tbmedtrack.app.data.db.OpSyncStatus
 import com.tbmedtrack.app.data.db.SyncState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -26,6 +32,47 @@ class SyncManager(private val context: Context) {
     private val mutex = Mutex()
 
     private val secureStore by lazy { SecureStore(context) }
+    private val meta by lazy { SyncStatusStore(context) }
+
+    /** Always-on sync status for the UI. Recomputed on every sync attempt. */
+    private val _status = MutableStateFlow(SyncStatus())
+    val status: StateFlow<SyncStatus> = _status.asStateFlow()
+
+    /** True if the device currently has a validated internet connection. */
+    private fun isOnline(): Boolean {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return true
+        val net = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(net) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    /** Recompute [status] from stored metadata + local pending count + connectivity. */
+    private suspend fun publishStatus(phase: SyncPhase) {
+        val pending = runCatching {
+            AppDatabase.get(context).syncOperationDao().countByStatus(OpSyncStatus.PENDING)
+        }.getOrDefault(0)
+        val configured = !secureStore.baseUrl.isNullOrBlank()
+        val resolvedPhase = when {
+            !configured -> SyncPhase.LOCAL_ONLY
+            phase == SyncPhase.SYNCED && !isOnline() -> SyncPhase.OFFLINE
+            else -> phase
+        }
+        _status.value = SyncStatus(
+            phase = resolvedPhase,
+            configured = configured,
+            lastUploadAt = meta.lastUploadAt,
+            lastDownloadAt = meta.lastDownloadAt,
+            cloudVersion = meta.cloudVersion,
+            pendingCount = pending,
+            connectedDevices = meta.connectedDevices
+        )
+    }
+
+    /** Refresh the status flow without performing a sync (e.g. on screen open). */
+    fun refreshStatus() {
+        scope.launch { publishStatus(if (isOnline()) SyncPhase.SYNCED else SyncPhase.OFFLINE) }
+    }
 
     /**
      * Choose the active client based on stored config: if a backend URL is present, use the
@@ -74,21 +121,34 @@ class SyncManager(private val context: Context) {
             val opDao = db.syncOperationDao()
 
             val pendingEvents = logDao.getBySyncState(SyncState.PENDING)
-            val pendingOps = opDao.byStatus(com.tbmedtrack.app.data.db.OpSyncStatus.PENDING)
+            val pendingOps = opDao.byStatus(OpSyncStatus.PENDING)
 
             if (!client.isConfigured) {
                 // No backend: settle local queues so they don't grow unbounded. Data stays local.
                 pendingEvents.forEach { logDao.setSyncState(it.uuid, SyncState.SYNCED) }
-                pendingOps.forEach { opDao.setStatus(it.operationId, com.tbmedtrack.app.data.db.OpSyncStatus.SYNCED) }
+                pendingOps.forEach { opDao.setStatus(it.operationId, OpSyncStatus.SYNCED) }
+                publishStatus(SyncPhase.LOCAL_ONLY)
                 return
             }
 
+            if (!isOnline()) {
+                // Offline: keep everything pending; it uploads automatically on reconnect.
+                publishStatus(SyncPhase.OFFLINE)
+                return
+            }
+
+            publishStatus(SyncPhase.SYNCING)
+            var errored = false
+
             // Upload events. Idempotent: the server upserts by uuid, so replays are safe.
-            runCatching {
-                val uploaded = client.uploadEvents(pendingEvents).getOrThrow()
-                uploaded.forEach { uuid -> logDao.setSyncState(uuid, SyncState.SYNCED) }
-            }.onFailure {
-                // leave events PENDING for the next attempt (retry on reconnect)
+            if (pendingEvents.isNotEmpty()) {
+                runCatching {
+                    val uploaded = client.uploadEvents(pendingEvents).getOrThrow()
+                    uploaded.forEach { uuid -> logDao.setSyncState(uuid, SyncState.SYNCED) }
+                    meta.lastUploadAt = System.currentTimeMillis()
+                }.onFailure {
+                    errored = true // leave events PENDING for the next attempt (retry on reconnect)
+                }
             }
 
             // Mark operations synced only once their event upload succeeded.
@@ -96,26 +156,114 @@ class SyncManager(private val context: Context) {
                 val event = logDao.getByUuid(op.recordId)
                 val settled = event == null || event.syncState == SyncState.SYNCED
                 if (settled) {
-                    opDao.setStatus(op.operationId, com.tbmedtrack.app.data.db.OpSyncStatus.SYNCED)
+                    opDao.setStatus(op.operationId, OpSyncStatus.SYNCED)
                 } else {
-                    val status = if (op.retryCount + 1 >= maxRetries)
-                        com.tbmedtrack.app.data.db.OpSyncStatus.FAILED
-                    else com.tbmedtrack.app.data.db.OpSyncStatus.PENDING
+                    val status = if (op.retryCount + 1 >= maxRetries) OpSyncStatus.FAILED
+                    else OpSyncStatus.PENDING
                     opDao.incrementRetry(op.operationId, status)
                 }
             }
 
             // Pull remote changes and merge (TAKEN/REVERTED authoritative).
             var changed = false
+            var maxRemote = 0L
             runCatching {
                 val remote = client.downloadEvents(0L).getOrThrow()
-                for (r in remote) if (mergeRemote(r)) changed = true
+                for (r in remote) {
+                    if (r.updatedAt > maxRemote) maxRemote = r.updatedAt
+                    if (mergeRemote(r)) changed = true
+                }
+                meta.lastDownloadAt = System.currentTimeMillis()
+                if (maxRemote > meta.cloudVersion) meta.cloudVersion = maxRemote
+            }.onFailure { errored = true }
+
+            // Refresh the connected-device count + cloud version opportunistically.
+            runCatching {
+                client.syncStatus().getOrNull()?.let { s ->
+                    meta.cloudVersion = maxOf(meta.cloudVersion, s.cloudVersion)
+                    meta.connectedDevices = s.devices.count { !it.isThisDevice }
+                }
             }
+
             // Refresh widgets so a monitor device reflects the newly-synced status.
             if (changed) {
                 com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(context)
             }
+            publishStatus(if (errored) SyncPhase.ERROR else SyncPhase.SYNCED)
         }
+    }
+
+    /**
+     * Manual CHECK SYNC: verifies the full chain — local pending drained, backend reachable,
+     * cloud (Turso) at the latest version, and every authorized monitoring device has actually
+     * received that version. Never reports "fully synced" just because Turso has the data; a
+     * monitor still behind is surfaced as a warning.
+     */
+    suspend fun checkSync(): SyncCheckResult {
+        val now = System.currentTimeMillis()
+        // First push anything pending so the check reflects the true latest state.
+        runCatching { syncNow() }
+
+        val configured = !secureStore.baseUrl.isNullOrBlank()
+        if (!configured) {
+            return SyncCheckResult(
+                overallOk = false,
+                overallLabel = "Cloud sync not set up",
+                lines = listOf(
+                    SyncCheckLine("Backend configured", false, "Add your backend URL to enable multi-device sync.")
+                ),
+                cloudVersion = 0,
+                checkedAtMillis = now
+            )
+        }
+
+        val pending = runCatching {
+            AppDatabase.get(context).syncOperationDao().countByStatus(OpSyncStatus.PENDING)
+        }.getOrDefault(0)
+
+        val statusResult = client.syncStatus()
+        val lines = mutableListOf<SyncCheckLine>()
+        var overallOk = true
+
+        // 1) Local upload complete.
+        val uploadOk = pending == 0
+        lines += SyncCheckLine(
+            "Cloud upload complete", uploadOk,
+            if (uploadOk) "" else "$pending change(s) still pending upload."
+        )
+        if (!uploadOk) overallOk = false
+
+        val cloud = statusResult.getOrNull()
+        if (cloud == null) {
+            lines += SyncCheckLine("Turso database updated", false, "Could not reach the sync server.")
+            return SyncCheckResult(false, "🔴 Sync problem", lines, meta.cloudVersion, now)
+        }
+        meta.cloudVersion = maxOf(meta.cloudVersion, cloud.cloudVersion)
+
+        // 2) Turso reachable + has the latest version.
+        lines += SyncCheckLine("Turso database updated", true, "Cloud version #${cloud.cloudVersion}")
+
+        // 3) Per-device received status (primary + monitors).
+        cloud.devices.forEach { d ->
+            val roleLabel = if (d.role.equals("PRIMARY", true)) "Primary device" else "${d.name} (monitor)"
+            val ok = d.upToDate
+            if (!ok) overallOk = false
+            lines += SyncCheckLine(
+                (if (d.isThisDevice) "This device" else roleLabel) + " synced",
+                ok,
+                if (ok) "#${d.lastSyncedVersion}" else "Last received #${d.lastSyncedVersion} • waiting for #${cloud.cloudVersion}"
+            )
+        }
+
+        meta.connectedDevices = cloud.devices.count { !it.isThisDevice }
+        publishStatus(if (overallOk) SyncPhase.SYNCED else SyncPhase.SYNCING)
+
+        val label = when {
+            overallOk -> "🟢 Everything is synchronized"
+            cloud.devices.any { !it.upToDate && !it.role.equals("PRIMARY", true) } -> "🟡 Waiting for monitoring device"
+            else -> "🟡 Sync pending"
+        }
+        return SyncCheckResult(overallOk, label, lines, cloud.cloudVersion, now)
     }
 
     /** Requeue FAILED operations for another attempt (e.g. when connectivity returns). */

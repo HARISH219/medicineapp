@@ -33,9 +33,30 @@ interface SyncClient {
 
     /** Revoke a device's access (primary device). */
     suspend fun revokeDevice(deviceId: String): Result<Unit>
+
+    /** Cloud sync-version status: the cloud's latest version + each device's acked version. */
+    suspend fun syncStatus(): Result<CloudSyncStatus>
 }
 
 data class AuthCode(val code: String, val expiresAtMillis: Long)
+
+/** One device's synchronization state as reported by the backend. */
+data class RemoteDeviceStatus(
+    val deviceId: String,
+    val name: String,
+    val role: String,
+    val lastSyncedVersion: Long,
+    val upToDate: Boolean,
+    val online: Boolean,
+    val lastActiveAt: Long,
+    val isThisDevice: Boolean
+)
+
+/** Account-wide sync-version snapshot from the backend. */
+data class CloudSyncStatus(
+    val cloudVersion: Long,
+    val devices: List<RemoteDeviceStatus>
+)
 
 /**
  * Local-only no-op implementation. Everything the user does works and is stored locally;
@@ -52,4 +73,6 @@ class NoopSyncClient : SyncClient {
     override suspend fun redeemAuthCode(code: String, deviceName: String): Result<Unit> =
         Result.failure(IllegalStateException("No sync backend configured"))
     override suspend fun revokeDevice(deviceId: String): Result<Unit> = Result.success(Unit)
+    override suspend fun syncStatus(): Result<CloudSyncStatus> =
+        Result.failure(IllegalStateException("No sync backend configured"))
 }

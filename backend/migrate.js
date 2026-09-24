@@ -22,7 +22,18 @@ for (const f of files) {
   const statements = sql.split(/;\s*$/m).map((s) => s.trim()).filter(Boolean);
   console.log(`Applying ${f} (${statements.length} statements)`);
   for (const stmt of statements) {
-    await db.execute(stmt);
+    try {
+      await db.execute(stmt);
+    } catch (e) {
+      // Tolerate re-runs: "duplicate column name" (ADD COLUMN) and "already exists" (CREATE)
+      // so migrations are safely idempotent without a tracking table.
+      const msg = String(e && e.message).toLowerCase();
+      if (msg.includes("duplicate column") || msg.includes("already exists")) {
+        console.log(`  (skip, already applied) ${stmt.slice(0, 60)}...`);
+      } else {
+        throw e;
+      }
+    }
   }
 }
 console.log("Migrations complete.");

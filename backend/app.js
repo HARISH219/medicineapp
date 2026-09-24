@@ -80,7 +80,7 @@ app.get("/", (_req, res) =>
   res.json({
     service: "TB MedTrack sync backend",
     status: "ok",
-    endpoints: ["/health", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events"],
+    endpoints: ["/health", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
   })
 );
 
@@ -170,14 +170,54 @@ app.post("/v1/devices/fcm-token", auth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Pull events updated since a watermark.
+// Pull events updated since a watermark. Records this device's sync watermark so we can later
+// tell whether each device (including monitors) has received the latest cloud version.
 app.get("/v1/events", auth, async (req, res) => {
   const since = Number(req.query.since || 0);
   const rows = await db.execute({
     sql: "SELECT * FROM medication_events WHERE user_id = ? AND updated_at > ? ORDER BY updated_at ASC LIMIT 1000",
     args: [req.device.user_id, since],
   });
-  res.json({ events: rows.rows.map(toDto) });
+  const events = rows.rows.map(toDto);
+  // Advance this device's watermark to the newest event it has now received.
+  const maxSeen = events.reduce((m, e) => Math.max(m, e.updatedAt || 0), since);
+  await db
+    .execute({
+      sql: "UPDATE devices SET last_synced_version = MAX(last_synced_version, ?), last_active_at = ? WHERE device_id = ?",
+      args: [maxSeen, Date.now(), req.device.device_id],
+    })
+    .catch(() => {});
+  res.json({ events });
+});
+
+// Report the synchronization version for this account: the cloud's latest version and each
+// authorized device's acknowledged version, so the app can verify monitors actually received it.
+app.get("/v1/sync-status", auth, async (req, res) => {
+  const userId = req.device.user_id;
+  const verRow = await db.execute({
+    sql: "SELECT COALESCE(MAX(updated_at),0) AS v FROM medication_events WHERE user_id = ?",
+    args: [userId],
+  });
+  const cloudVersion = Number(verRow.rows[0]?.v || 0);
+  const devRows = await db.execute({
+    sql:
+      "SELECT device_id, name, role, revoked, last_active_at, COALESCE(last_synced_version,0) AS lsv " +
+      "FROM devices WHERE user_id = ? AND revoked = 0",
+    args: [userId],
+  });
+  const now = Date.now();
+  const devices = devRows.rows.map((d) => ({
+    deviceId: d.device_id,
+    name: d.name || "Device",
+    role: d.role,
+    lastSyncedVersion: Number(d.lsv || 0),
+    upToDate: Number(d.lsv || 0) >= cloudVersion,
+    // "online" heuristic: active within the last 3 minutes.
+    online: !!d.last_active_at && now - Number(d.last_active_at) < 3 * 60 * 1000,
+    lastActiveAt: Number(d.last_active_at || 0),
+    isThisDevice: d.device_id === req.device.device_id,
+  }));
+  res.json({ cloudVersion, devices });
 });
 
 // Upload events. Idempotent upsert by uuid with TAKEN/REVERTED merge.

@@ -50,6 +50,23 @@ class RemoteSyncClient(private val store: SecureStore) : SyncClient {
     @Serializable private data class RedeemResponse(val sessionToken: String)
     @Serializable private data class RevokeRequest(val deviceId: String)
 
+    @Serializable
+    private data class DeviceStatusDto(
+        val deviceId: String = "",
+        val name: String = "Device",
+        val role: String = "",
+        val lastSyncedVersion: Long = 0,
+        val upToDate: Boolean = false,
+        val online: Boolean = false,
+        val lastActiveAt: Long = 0,
+        val isThisDevice: Boolean = false
+    )
+    @Serializable
+    private data class SyncStatusResponse(
+        val cloudVersion: Long = 0,
+        val devices: List<DeviceStatusDto> = emptyList()
+    )
+
     override suspend fun uploadEvents(events: List<MedicationLog>): Result<List<String>> =
         withContext(Dispatchers.IO) {
             if (events.isEmpty()) return@withContext Result.success(emptyList())
@@ -96,6 +113,28 @@ class RemoteSyncClient(private val store: SecureStore) : SyncClient {
 
     override suspend fun revokeDevice(deviceId: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching { post("/v1/devices/revoke", json.encodeToString(RevokeRequest(deviceId))); Unit }
+    }
+
+    override suspend fun syncStatus(): Result<CloudSyncStatus> = withContext(Dispatchers.IO) {
+        runCatching {
+            val resp = get("/v1/sync-status")
+            val r = json.decodeFromString<SyncStatusResponse>(resp)
+            CloudSyncStatus(
+                cloudVersion = r.cloudVersion,
+                devices = r.devices.map {
+                    RemoteDeviceStatus(
+                        deviceId = it.deviceId,
+                        name = it.name,
+                        role = it.role,
+                        lastSyncedVersion = it.lastSyncedVersion,
+                        upToDate = it.upToDate,
+                        online = it.online,
+                        lastActiveAt = it.lastActiveAt,
+                        isThisDevice = it.isThisDevice
+                    )
+                }
+            )
+        }
     }
 
     // --- HTTP helpers ---

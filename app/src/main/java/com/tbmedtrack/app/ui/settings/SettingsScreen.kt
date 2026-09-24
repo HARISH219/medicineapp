@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import com.tbmedtrack.app.BuildConfig
 import com.tbmedtrack.app.data.settings.ThemeMode
 import com.tbmedtrack.app.ui.components.SectionCard
@@ -306,14 +307,12 @@ fun SettingsScreen(
             }
         }
 
+        item { CloudSyncStatusCard(context, onOpenDetails = onOpenCloudSync) }
+
         item {
             SectionCard {
                 Text("Devices & monitoring", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(10.dp))
-                OutlinedButton(onClick = onOpenCloudSync, modifier = Modifier.fillMaxWidth()) {
-                    Text("Cloud sync")
-                }
-                Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = onOpenDevices, modifier = Modifier.fillMaxWidth()) {
                     Text("Authorized devices")
                 }
@@ -521,6 +520,63 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 @Composable
 private fun ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
     FilterChip(selected = selected, onClick = onClick, label = { Text(label) })
+}
+
+/**
+ * Always-on Cloud Sync status card (no enable/disable). Shows a colored status dot, last-synced
+ * time and connected-device count, a CHECK SYNC button, and opens the full details page.
+ */
+@Composable
+private fun CloudSyncStatusCard(context: android.content.Context, onOpenDetails: () -> Unit) {
+    val sync = remember { com.tbmedtrack.app.ServiceLocator.syncManager(context) }
+    val status by sync.status.collectAsStateWithLifecycle()
+    var checking by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    // Keep status fresh while the screen is visible.
+    androidx.compose.runtime.LaunchedEffect(Unit) { sync.refreshStatus() }
+
+    val (dot, label) = when (status.phase) {
+        com.tbmedtrack.app.sync.SyncPhase.SYNCED -> "🟢" to "Synced"
+        com.tbmedtrack.app.sync.SyncPhase.SYNCING -> "🟡" to "Syncing…"
+        com.tbmedtrack.app.sync.SyncPhase.OFFLINE -> "🔵" to "Waiting for connection"
+        com.tbmedtrack.app.sync.SyncPhase.ERROR -> "🔴" to "Sync problem"
+        com.tbmedtrack.app.sync.SyncPhase.LOCAL_ONLY -> "⚪" to "Local only"
+    }
+    val lastSynced = maxOf(status.lastUploadAt, status.lastDownloadAt)
+    val lastLabel = if (lastSynced <= 0) "—"
+    else java.time.Instant.ofEpochMilli(lastSynced)
+        .atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+        .format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"))
+
+    SectionCard {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("☁️ Cloud Sync", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            Text("Always active", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(8.dp))
+        Text("$dot $label", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(4.dp))
+        Text("Last synced: $lastLabel", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Devices: ${status.connectedDevices} connected", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (status.pendingCount > 0) {
+            Text("Pending changes: ${status.pendingCount}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            androidx.compose.material3.Button(
+                onClick = {
+                    if (!checking) {
+                        checking = true
+                        scope.launch { runCatching { sync.checkSync() }; checking = false }
+                    }
+                },
+                enabled = !checking && status.configured,
+                modifier = Modifier.weight(1f)
+            ) { Text(if (checking) "Checking…" else "CHECK SYNC") }
+            OutlinedButton(onClick = onOpenDetails, modifier = Modifier.weight(1f)) { Text("Details") }
+        }
+    }
 }
 
 /** Device role + emergency/trusted contact (editable) + Test Call. */
