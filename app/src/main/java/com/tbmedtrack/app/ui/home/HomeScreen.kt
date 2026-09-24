@@ -55,6 +55,7 @@ import com.tbmedtrack.app.ui.theme.DueOrange
 import com.tbmedtrack.app.ui.theme.DueOrangeSoft
 import com.tbmedtrack.app.ui.theme.StatusMissed
 import com.tbmedtrack.app.ui.theme.StatusTaken
+import com.tbmedtrack.app.ui.theme.StatusUpcoming
 import kotlinx.coroutines.launch
 
 @Composable
@@ -90,21 +91,39 @@ fun HomeScreen(
         ) {
             item { GreetingHeader(state) }
 
-            state.nextDose?.let { next ->
+            // 1) OVERDUE cards first (red), earliest missed dose on top. Stay until recorded.
+            items(state.overdueEvents, key = { "overdue-${it.timeMinutes}" }) { event ->
+                OverdueCard(
+                    event = event,
+                    onTakenNow = {
+                        vm.markEventTaken(event)
+                        showUndo(scope, snackbarHostState) { vm.revertEvent(event) }
+                    },
+                    onMarkAtTime = { alreadyTookTarget = event }
+                )
+            }
+
+            // 2) Hero = the PRIMARY event (earliest untaken). Only show it as a hero when it's
+            // the current/next dose (DUE or UPCOMING) — overdue ones are already shown above.
+            val heroEvent = state.primaryEvent
+            if (heroEvent != null &&
+                (state.primaryState == com.tbmedtrack.app.ui.home.DoseUrgency.DUE ||
+                    state.primaryState == com.tbmedtrack.app.ui.home.DoseUrgency.UPCOMING)
+            ) {
                 item {
                     NextDoseHero(
                         state = state,
-                        event = next,
+                        event = heroEvent,
                         onMarkTaken = {
-                            vm.markEventTaken(next)
-                            showUndo(scope, snackbarHostState) { vm.revertEvent(next) }
+                            vm.markEventTaken(heroEvent)
+                            showUndo(scope, snackbarHostState) { vm.revertEvent(heroEvent) }
                         }
                     )
                 }
-                if (!next.allTaken) {
+                if (!heroEvent.allTaken) {
                     item {
                         androidx.compose.material3.TextButton(
-                            onClick = { alreadyTookTarget = next },
+                            onClick = { alreadyTookTarget = heroEvent },
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("I already took it (enter time)") }
                     }
@@ -117,7 +136,7 @@ fun HomeScreen(
                         food = food,
                         onEaten = { vm.recordFood() },
                         onOpenMedication = {
-                            state.nextDose?.let { onOpenEvent(it) }
+                            state.primaryEvent?.let { onOpenEvent(it) }
                         }
                     )
                 }
@@ -405,6 +424,81 @@ private fun NextDoseHero(state: HomeUiState, event: DoseEvent, onMarkTaken: () -
     }
 }
 
+/**
+ * Red OVERDUE card: a scheduled dose whose time has passed and is not recorded. Subtle red
+ * glow/border on the dark surface, warning icon, "NOT TAKEN YET", and two actions:
+ *  - "Taken now" (records the current time -> Taken late)
+ *  - "Mark as taken" (opens the custom-time modal)
+ * Stays visible until the user records it.
+ */
+@Composable
+private fun OverdueCard(
+    event: DoseEvent,
+    onTakenNow: () -> Unit,
+    onMarkAtTime: () -> Unit
+) {
+    val timeLabel = com.tbmedtrack.app.util.ScheduleUtil.formatTime(event.timeMinutes)
+    val partOfDay = when {
+        event.timeMinutes < 12 * 60 -> "Morning medicines"
+        event.timeMinutes < 17 * 60 -> "Afternoon medicines"
+        else -> "Night medicines"
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.linearGradient(listOf(Color(0x33EF4444), Color(0x14EF4444))),
+                RoundedCornerShape(24.dp)
+            )
+            .border(1.5.dp, StatusMissed.copy(alpha = 0.6f), RoundedCornerShape(24.dp))
+    ) {
+        Column(Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("⚠", style = MaterialTheme.typography.titleLarge, color = StatusMissed)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "$timeLabel  •  $partOfDay",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "${event.medicinesCount} ${if (event.medicinesCount == 1) "medicine" else "medicines"} • " +
+                            "${event.tabletsCount} ${if (event.tabletsCount == 1) "tablet" else "tablets"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = DarkOnSurfaceMuted
+                    )
+                }
+                Box(
+                    Modifier
+                        .background(StatusMissed.copy(alpha = 0.20f), RoundedCornerShape(50))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text("🔴 NOT TAKEN YET", style = MaterialTheme.typography.labelLarge, color = StatusMissed, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Button(
+                onClick = onTakenNow,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = StatusTaken, contentColor = Color.White)
+            ) {
+                Icon(Icons.Filled.CheckCircle, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Taken now", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedButton(
+                onClick = onMarkAtTime,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("Mark as taken (choose time)") }
+        }
+    }
+}
+
 /** Today's progress: "X/Y doses taken", dual event markers, circular % ring. */
 @Composable
 private fun TodayProgressCard(state: HomeUiState) {
@@ -473,10 +567,12 @@ private fun EventMarkerRow(ev: DoseEvent) {
         Spacer(Modifier.width(8.dp))
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
         Spacer(Modifier.width(8.dp))
+        val nowMs = System.currentTimeMillis()
         val (dotColor, statusText) = when {
             ev.allTaken -> StatusTaken to "Taken"
-            System.currentTimeMillis() > ev.scheduledMillis + 60 * 60_000L -> StatusMissed to "Overdue"
-            else -> DueOrange to "Due"
+            nowMs > ev.scheduledMillis + 60 * 60_000L -> StatusMissed to "Overdue"
+            nowMs >= ev.scheduledMillis -> DueOrange to "Due"
+            else -> StatusUpcoming to "Upcoming"
         }
         Box(
             Modifier
@@ -497,11 +593,13 @@ private fun ScheduleEventCard(
     onRequestRevert: () -> Unit
 ) {
     val now = System.currentTimeMillis()
+    // Each card is colored by ITS OWN time, so a future dose stays yellow/upcoming even when an
+    // earlier dose is overdue. Green=taken, Red=overdue, Orange=due, Yellow=upcoming.
     val (accent, statusText) = when {
         event.allTaken -> StatusTaken to "Taken"
         now > event.scheduledMillis + 60 * 60_000L -> StatusMissed to "Overdue"
         now >= event.scheduledMillis -> DueOrange to "Due"
-        else -> AccentPurple to "Upcoming"
+        else -> StatusUpcoming to "Upcoming"
     }
     val clickMod = if (event.allTaken) {
         Modifier.combinedClickable(onClick = onClick, onLongClick = onRequestRevert)
@@ -637,6 +735,20 @@ private fun FoodTimingCard(
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
+
+        // Which medicine this food gap is associated with (earliest untaken / overdue dose).
+        food.associatedLabel?.let { label ->
+            Spacer(Modifier.height(8.dp))
+            Text("Medicine associated with food", style = MaterialTheme.typography.bodyMedium, color = DarkOnSurfaceMuted)
+            Text(label, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (food.associatedOverdue) "🔴 Medicine not taken yet" else "🟡 Upcoming / due",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (food.associatedOverdue) StatusMissed else StatusUpcoming,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
 
         if (food.hasPendingGapDose && food.medicineAvailableMillis != null) {
             Spacer(Modifier.height(8.dp))

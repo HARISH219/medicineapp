@@ -83,7 +83,8 @@ fun TbMedApp() {
         currentRoute == Routes.CLOUD_SYNC ||
         currentRoute?.startsWith(Routes.PHASE_PREVIEW) == true ||
         currentRoute?.startsWith(Routes.EVENT_DETAIL) == true ||
-        currentRoute == Routes.FOOD_HISTORY
+        currentRoute == Routes.FOOD_HISTORY ||
+        currentRoute == Routes.MEDICINES
 
     ScreenBackground {
         Scaffold(
@@ -152,7 +153,8 @@ fun TbMedApp() {
                         onOpenMonitor = { navController.navigate(Routes.MONITOR) },
                         onImportHistory = { navController.navigate(Routes.IMPORT_HISTORY) },
                         onOpenCloudSync = { navController.navigate(Routes.CLOUD_SYNC) },
-                        onOpenFoodHistory = { navController.navigate(Routes.FOOD_HISTORY) }
+                        onOpenFoodHistory = { navController.navigate(Routes.FOOD_HISTORY) },
+                        onOpenMedicines = { navController.navigate(Routes.MEDICINES) }
                     )
                 }
                 composable(Routes.TREATMENT) {
@@ -231,14 +233,16 @@ private fun FloatingBottomNav(
     onSelect: (String) -> Unit,
     onAdd: () -> Unit
 ) {
+    // Exactly 4 tab entries: 2 left of the +, 2 right. The + is an elevated FAB centered in the
+    // fixed gap between them, so it never overlaps a tab on any screen width.
     val left = listOf(BottomDest.HOME, BottomDest.SCHEDULE)
-    val right = listOf(BottomDest.MEDICINES, BottomDest.STATS, BottomDest.SETTINGS)
+    val right = listOf(BottomDest.STATS, BottomDest.SETTINGS)
     Box(
         Modifier
             .fillMaxWidth()
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 12.dp),
-        contentAlignment = Alignment.BottomCenter
+        contentAlignment = Alignment.TopCenter
     ) {
         Row(
             Modifier
@@ -246,24 +250,25 @@ private fun FloatingBottomNav(
                 .height(64.dp)
                 .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(28.dp))
                 .border(1.dp, Color(0x22FFFFFF), RoundedCornerShape(28.dp))
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceEvenly
+            horizontalArrangement = Arrangement.Center
         ) {
             left.forEach { NavPill(it, currentRoute, Modifier.weight(1f), onSelect) }
-            Spacer(Modifier.width(56.dp)) // gap for elevated (+)
+            // Fixed centered gap that reserves room for the elevated (+); balanced 2 | gap | 2.
+            Spacer(Modifier.weight(0.9f))
             right.forEach { NavPill(it, currentRoute, Modifier.weight(1f), onSelect) }
         }
-        // Elevated center (+)
+        // Elevated center (+): raised above the pill, horizontally centered on every width.
         Box(
             Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 0.dp)
-                .size(58.dp)
+                .size(60.dp)
                 .background(
                     Brush.linearGradient(listOf(Indigo, AccentPurple)),
                     CircleShape
                 )
+                .border(3.dp, MaterialTheme.colorScheme.background, CircleShape)
                 .clickable(onClick = onAdd),
             contentAlignment = Alignment.Center
         ) {
@@ -316,6 +321,7 @@ private fun topTitle(route: String?): String = when {
     route == Routes.IMPORT_HISTORY -> "Import history"
     route == Routes.CLOUD_SYNC -> "Cloud sync"
     route == Routes.FOOD_HISTORY -> "Food timing history"
+    route == Routes.MEDICINES -> "My medicines"
     route?.startsWith(Routes.PHASE_PREVIEW) == true -> "Schedule preview"
     else -> "TB MedTrack"
 }

@@ -46,8 +46,24 @@ data class HomeUiState(
     /** phased medicines NOT scheduled today, with their next dose info */
     val notScheduledToday: List<NotScheduledInfo> = emptyList(),
     /** food → medicine gap state for the home Food Timing card (null = no gap configured today) */
-    val food: FoodUiState? = null
+    val food: FoodUiState? = null,
+    /**
+     * Overdue events: scheduled time has passed and NOT all taken. Shown at the top, red, and
+     * remain until explicitly recorded. Earliest first.
+     */
+    val overdueEvents: List<DoseEvent> = emptyList(),
+    /**
+     * The single event that should get primary focus = the EARLIEST scheduled event today that
+     * is not fully taken (overdue if past, due if within the window, else the next upcoming).
+     * Never a future event while an earlier one is incomplete.
+     */
+    val primaryEvent: DoseEvent? = null,
+    /** presentation state of [primaryEvent] */
+    val primaryState: DoseUrgency = DoseUrgency.NONE
 )
+
+/** Urgency buckets used for card color + ordering. */
+enum class DoseUrgency { NONE, UPCOMING, DUE, OVERDUE, TAKEN }
 
 /** State for the home "Food Timing" card. */
 data class FoodUiState(
@@ -60,7 +76,11 @@ data class FoodUiState(
     /** true when there is a pending food-gapped dose that food would affect */
     val hasPendingGapDose: Boolean,
     /** the default gap minutes (for display) */
-    val gapMinutes: Int
+    val gapMinutes: Int,
+    /** label of the medicine/event the food gap is associated with, e.g. "10:00 AM Morning medicine" */
+    val associatedLabel: String? = null,
+    /** true if the associated dose is past its scheduled time and not taken (overdue) */
+    val associatedOverdue: Boolean = false
 )
 
 data class NotScheduledInfo(
@@ -108,14 +128,31 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             val hasMeds = repo.getAllMedicinesWithSchedules().isNotEmpty()
 
             val now = System.currentTimeMillis()
-            // Next upcoming or currently-due event
-            val next = events.firstOrNull { ev ->
-                ev.doses.any { it.status == DoseStatus.SCHEDULED } &&
-                    ev.scheduledMillis + 60 * 60_000L >= now
-            } ?: events.firstOrNull { ev -> ev.doses.any { it.status == DoseStatus.SCHEDULED } }
+            val dueWindowMs = 60 * 60_000L // "due" grace window after scheduled time
 
-            val due = next != null && now >= next.scheduledMillis &&
-                now <= next.scheduledMillis + 60 * 60_000L
+            // Events sorted by scheduled time (ascending).
+            val ordered = events.sortedBy { it.scheduledMillis }
+            // Not-yet-fully-taken events.
+            val pending = ordered.filter { !it.allTaken }
+
+            // OVERDUE = past its scheduled time (beyond the due window) and not fully taken.
+            val overdue = pending.filter { now > it.scheduledMillis + dueWindowMs }
+            // DUE = scheduled time reached, still within the due window, not fully taken.
+            val dueNow = pending.filter { now in it.scheduledMillis..(it.scheduledMillis + dueWindowMs) }
+
+            // PRIMARY = the EARLIEST scheduled event that isn't fully taken. This guarantees an
+            // earlier missed dose always takes priority over any later/future dose.
+            val primary = pending.minByOrNull { it.scheduledMillis }
+            val primaryState = when {
+                primary == null -> DoseUrgency.NONE
+                now > primary.scheduledMillis + dueWindowMs -> DoseUrgency.OVERDUE
+                now >= primary.scheduledMillis -> DoseUrgency.DUE
+                else -> DoseUrgency.UPCOMING
+            }
+
+            // The hero card uses the primary event (earliest untaken), NOT a blind "next future".
+            val next = primary ?: ordered.lastOrNull()
+            val due = primaryState == DoseUrgency.DUE
 
             val treatmentStart = resolveTreatmentStart()
             val treatmentDay = if (treatmentStart == null) 0
@@ -130,16 +167,14 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 .maxByOrNull { it.timeMinutes }
 
             // A dose event is "pending action" if its time has arrived and not all taken.
-            val pendingEvent = events.firstOrNull { ev ->
-                now >= ev.scheduledMillis && ev.doses.any { it.status != DoseStatus.TAKEN }
-            }
+            val pendingEvent = (overdue + dueNow).minByOrNull { it.scheduledMillis }
             val actionRequired = pendingEvent != null
 
             val eventsTotal = events.size
             val eventsCompleted = events.count { it.allTaken }
             val todayComplete = eventsTotal > 0 && eventsCompleted == eventsTotal
 
-            val food = computeFoodState(doses)
+            val food = computeFoodState(doses, ordered)
 
             _state.value = HomeUiState(
                 greeting = greeting(),
@@ -170,36 +205,82 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 eventsTotal = eventsTotal,
                 todayComplete = todayComplete,
                 notScheduledToday = notScheduled,
-                food = food
+                food = food,
+                overdueEvents = overdue,
+                primaryEvent = primary,
+                primaryState = primaryState
             )
         }
     }
 
+    /** Human label for the medicine/event a food gap attaches to, e.g. "10:00 AM Morning medicine". */
+    private fun eventLabel(event: DoseEvent): String {
+        val part = when {
+            event.timeMinutes < 12 * 60 -> "Morning medicine"
+            event.timeMinutes < 17 * 60 -> "Afternoon medicine"
+            else -> "Night medicine"
+        }
+        return "${ScheduleUtil.formatTime(event.timeMinutes)} $part"
+    }
+
     /**
-     * Build the Food Timing card state. Uses the most food-restrictive PENDING dose today to
-     * compute when medicine becomes available given the latest recorded meal.
+     * Build the Food Timing card state.
+     *
+     * Association rule (spec #7-#10): the food gap attaches to the EARLIEST scheduled event today
+     * that is not yet taken — i.e. an overdue/past dose has priority over any future dose. It is
+     * NEVER blindly attached to the next future medicine while an earlier one is incomplete.
+     *
+     *   1. Among not-taken events whose scheduled time has PASSED, pick the earliest -> overdue.
+     *   2. Otherwise pick the earliest not-taken event (the current/next active dose).
+     * Then compute the food-adjusted eligible time for that specific event.
+     *
+     * [ordered] is today's events sorted by scheduled time.
      */
-    private suspend fun computeFoodState(doses: List<com.tbmedtrack.app.data.model.ScheduledDose>): FoodUiState {
+    private suspend fun computeFoodState(
+        doses: List<com.tbmedtrack.app.data.model.ScheduledDose>,
+        ordered: List<DoseEvent>
+    ): FoodUiState {
         val defaultGap = runCatching { settings.settings.first().defaultFoodGapMinutes }.getOrDefault(120)
         val lastFood = runCatching { foodRepo.latestFood() }.getOrNull()
+        val now = System.currentTimeMillis()
 
-        // Among pending doses that have a food gap, find the latest eligible time.
-        var available: Long? = null
-        var hasGapDose = false
-        for (dose in doses) {
+        val pending = ordered.filter { !it.allTaken }
+        // Priority: earliest PAST-and-not-taken event; else earliest pending event.
+        val associated = pending.filter { now > it.scheduledMillis }.minByOrNull { it.scheduledMillis }
+            ?: pending.minByOrNull { it.scheduledMillis }
+
+        if (associated == null) {
+            return FoodUiState(
+                lastFoodMillis = lastFood?.foodTimeMillis,
+                medicineAvailableMillis = null,
+                available = true,
+                hasPendingGapDose = false,
+                gapMinutes = defaultGap,
+                associatedLabel = null,
+                associatedOverdue = false
+            )
+        }
+
+        // Food-adjusted eligible time for the ASSOCIATED event only (use its most restrictive med).
+        var eligible: Long? = null
+        var hasGap = false
+        for (dose in associated.doses) {
             if (dose.status == com.tbmedtrack.app.data.db.DoseStatus.TAKEN) continue
             val med = repo.getMedicine(dose.medicineId) ?: continue
             val timing = runCatching { foodRepo.timingFor(med, dose.scheduledMillis) }.getOrNull() ?: continue
-            hasGapDose = true
-            if (available == null || timing.eligibleMillis > available!!) available = timing.eligibleMillis
+            hasGap = true
+            if (eligible == null || timing.eligibleMillis > eligible!!) eligible = timing.eligibleMillis
         }
-        val now = System.currentTimeMillis()
+        val overdue = now > associated.scheduledMillis + 60 * 60_000L
+
         return FoodUiState(
             lastFoodMillis = lastFood?.foodTimeMillis,
-            medicineAvailableMillis = available,
-            available = available != null && now >= available!!,
-            hasPendingGapDose = hasGapDose,
-            gapMinutes = defaultGap
+            medicineAvailableMillis = eligible,
+            available = eligible != null && now >= eligible!!,
+            hasPendingGapDose = hasGap,
+            gapMinutes = defaultGap,
+            associatedLabel = eventLabel(associated),
+            associatedOverdue = overdue
         )
     }
 

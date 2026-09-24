@@ -46,6 +46,7 @@ fun SettingsScreen(
     onImportHistory: () -> Unit = {},
     onOpenCloudSync: () -> Unit = {},
     onOpenFoodHistory: () -> Unit = {},
+    onOpenMedicines: () -> Unit = {},
     vm: SettingsViewModel = viewModel()
 ) {
     val settings by vm.settingsFlow.collectAsStateWithLifecycle()
@@ -91,6 +92,16 @@ fun SettingsScreen(
                 SwitchRow("🔔 Medication reminders", settings.remindersEnabled) { vm.setReminders(it) }
                 SwitchRow("🔊 Reminder sound", settings.soundEnabled) { vm.setSound(it) }
                 SwitchRow("📳 Vibration", settings.vibrationEnabled) { vm.setVibration(it) }
+            }
+        }
+
+        item {
+            SectionCard {
+                Text("Medicines", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(onClick = onOpenMedicines, modifier = Modifier.fillMaxWidth()) {
+                    Text("My medicines")
+                }
             }
         }
 

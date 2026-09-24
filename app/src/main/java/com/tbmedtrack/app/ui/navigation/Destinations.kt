@@ -2,9 +2,7 @@ package com.tbmedtrack.app.ui.navigation
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.Medication
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -31,14 +29,15 @@ object Routes {
 }
 
 /**
- * Bottom navigation destinations, in display order:
- * Home · Schedule · (+) · Medicines · Stats · Settings.
- * The center (+) is an elevated action, not a BottomDest entry.
+ * Bottom navigation destinations, in display order (exactly 5 slots on the bar):
+ *   Home · Schedule · (+) · Stats · Settings
+ * The center (+) is an elevated action, not a BottomDest entry, so there are 4 tab entries
+ * (two left of the +, two right). Medicines is reachable from the (+) / Add-medicine flow and
+ * other screens, but is intentionally NOT a bottom tab (that 6th item caused the + overlap).
  */
 enum class BottomDest(val route: String, val label: String, val icon: ImageVector) {
     HOME(Routes.HOME, "Home", Icons.Outlined.Home),
     SCHEDULE(Routes.CALENDAR, "Schedule", Icons.Outlined.Schedule),
-    MEDICINES(Routes.MEDICINES, "Medicines", Icons.Outlined.Medication),
     STATS(Routes.STATS, "Stats", Icons.Outlined.BarChart),
     SETTINGS(Routes.SETTINGS, "Settings", Icons.Outlined.Settings)
 }
