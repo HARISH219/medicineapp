@@ -1,11 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MedTrack launcher foreground (adaptive icon, 108x108 canvas).
+  Art sits within the ~center safe zone so the launcher mask never clips it:
+    - an orbiting ring (blue -> purple)
+    - a tilted two-tone capsule pill (blue -> purple)
+    - a white checkmark across the pill
+    - a green leaf accent
+  Text is intentionally omitted (launcher icons crop small text).
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group android:scaleX="2.6" android:scaleY="2.6" android:translateX="19" android:translateY="19">
+
+    <!-- Orbiting ring: an open circular arc that wraps behind the pill. -->
+    <path
+        android:strokeWidth="6"
+        android:strokeLineCap="round"
+        android:pathData="M34,36 A26,26 0 1 1 42,74">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="30" android:startY="30"
+                android:endX="78" android:endY="78">
+                <item android:offset="0.0" android:color="#FF8B5CF6" />
+                <item android:offset="1.0" android:color="#FF60A5FA" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- Green leaf accent (bottom-right of the pill). -->
+    <group android:translateX="66" android:translateY="58" android:rotation="30">
+        <path android:pathData="M0,0 C10,3 9,20 0,22 C-9,20 -10,3 0,0 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="-6" android:startY="0"
+                    android:endX="8" android:endY="22">
+                    <item android:offset="0.0" android:color="#FF34D399" />
+                    <item android:offset="1.0" android:color="#FF10B981" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <!-- leaf vein -->
         <path
-            android:fillColor="#FFFFFF"
-            android:pathData="M4.22,11.29l7.07,-7.07c1.95,-1.95 5.12,-1.95 7.07,0c1.95,1.95 1.95,5.12 0,7.07l-7.07,7.07c-1.95,1.95 -5.12,1.95 -7.07,0C2.27,16.41 2.27,13.24 4.22,11.29zM12.71,5.64l-6.36,6.36l5.66,5.66l6.36,-6.36L12.71,5.64z" />
+            android:strokeColor="#3300402A"
+            android:strokeWidth="1.4"
+            android:strokeLineCap="round"
+            android:pathData="M0,2 L0,20" />
     </group>
+
+    <!-- Capsule pill, tilted 45deg, centered. Rounded rect via large corner radius. -->
+    <group android:translateX="54" android:translateY="54" android:rotation="-45">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M-30,-13 h60 a13,13 0 0 1 0,26 h-60 a13,13 0 0 1 0,-26 z" />
+        <!-- Left (blue) half -->
+        <path android:pathData="M-30,-13 h30 v26 h-30 a13,13 0 0 1 0,-26 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="-30" android:startY="-13"
+                    android:endX="0" android:endY="13">
+                    <item android:offset="0.0" android:color="#FF60A5FA" />
+                    <item android:offset="1.0" android:color="#FF3B82F6" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <!-- Right (purple) half -->
+        <path android:pathData="M0,-13 h30 a13,13 0 0 1 0,26 h-30 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="0" android:startY="-13"
+                    android:endX="30" android:endY="13">
+                    <item android:offset="0.0" android:color="#FFA78BFA" />
+                    <item android:offset="1.0" android:color="#FF8B5CF6" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <!-- subtle top highlight on the pill -->
+        <path
+            android:fillColor="#33FFFFFF"
+            android:pathData="M-24,-9 h48 a6,6 0 0 1 0,4 h-48 a6,6 0 0 1 0,-4 z" />
+    </group>
+
+    <!-- White checkmark across the pill center. -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M42,55 l9,9 l17,-19" />
 </vector>

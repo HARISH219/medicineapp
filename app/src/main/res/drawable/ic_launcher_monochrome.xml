@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Monochrome glyph for Android 13+ themed icons. Single opaque color (the OS tints it):
+  a tilted capsule pill outline with a checkmark. Kept inside the safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#FFFFFFFF">
+
+    <!-- Pill body (filled). -->
+    <group android:translateX="54" android:translateY="54" android:rotation="-45">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M-30,-13 h60 a13,13 0 0 1 0,26 h-60 a13,13 0 0 1 0,-26 z" />
+        <!-- knock out the seam so the two halves read as a capsule -->
+        <path
+            android:fillColor="#00000000"
+            android:strokeColor="#66000000"
+            android:strokeWidth="2"
+            android:pathData="M0,-13 L0,13" />
+    </group>
+
+    <!-- Checkmark cut across (drawn in the same color; reads on tinted bg). -->
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M42,55 l9,9 l17,-19" />
+</vector>
