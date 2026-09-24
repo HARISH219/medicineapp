@@ -265,7 +265,7 @@ object NotificationHelper {
             "Your medication can now be taken. Food gap complete ✓"
         val body = buildString {
             append(lead).append("\n")
-            append("Scheduled: ${ScheduleUtil.formatTime(timeMinutes)}\n")
+            append("Scheduled: ${com.tbmedtrack.app.util.ScheduleUtil.formatTime(timeMinutes)}\n")
             if (foodMillis > 0) append("Food recorded: ${clock(foodMillis)}\n")
             append("Earliest medication time: ${clock(eligibleMillis)}")
             if (medicineNames.isNotEmpty()) {
