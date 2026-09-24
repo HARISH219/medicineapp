@@ -35,8 +35,12 @@ In the import screen (or later under **Project → Settings → Environment Vari
 | `TURSO_DATABASE_URL` | your libsql:// URL |
 | `TURSO_AUTH_TOKEN` | your NEW Turso token |
 | `SESSION_SIGNING_SECRET` | a long random string you invent |
+| `STATS_KEY` | a secret key to open the stats dashboard at `/stats?key=…` (leave unset to keep the dashboard disabled) |
 
 Apply them to the **Production** environment (and Preview if you like).
+
+The site: visiting the base URL shows a small HTML landing page; the medication stats
+dashboard is at `/stats` and requires `STATS_KEY` (data is never exposed without it).
 Leave `GOOGLE_APPLICATION_CREDENTIALS` unset for now (that's only for FCM push).
 
 ## Step 3 — Deploy
