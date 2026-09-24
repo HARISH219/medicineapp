@@ -12,6 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -71,7 +72,11 @@ class SyncManager(private val context: Context) {
 
     /** Refresh the status flow without performing a sync (e.g. on screen open). */
     fun refreshStatus() {
-        scope.launch { publishStatus(if (isOnline()) SyncPhase.SYNCED else SyncPhase.OFFLINE) }
+        scope.launch {
+            // Opportunistically finish auto-connect so the status reflects a real session.
+            runCatching { ensureConnected() }
+            publishStatus(if (isOnline()) SyncPhase.SYNCED else SyncPhase.OFFLINE)
+        }
     }
 
     /**
@@ -110,11 +115,40 @@ class SyncManager(private val context: Context) {
         scope.launch { runCatching { syncNow() } }
     }
 
+    /**
+     * Make sure this device is connected to the built-in backend without any user action. Since
+     * [SecureStore.baseUrl] always defaults to the app's backend, the only thing missing on a
+     * fresh install is a session token — so we bootstrap this device as PRIMARY automatically.
+     *
+     * A SECONDARY (monitor) device is NOT auto-bootstrapped: it must pair to the main account with
+     * a code, so we leave it alone until it redeems one.
+     */
+    suspend fun ensureConnected() {
+        reconfigure()
+        if (secureStore.baseUrl.isNullOrBlank()) return
+        if (!secureStore.sessionToken.isNullOrBlank()) return // already signed in
+        if (!isOnline()) return
+
+        val role = runCatching {
+            com.tbmedtrack.app.ServiceLocator.settingsRepository(context).settings.first().deviceRole
+        }.getOrDefault("")
+        if (role == com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY) return
+
+        val deviceRepo = com.tbmedtrack.app.ServiceLocator.deviceRepository(context)
+        runCatching {
+            client.bootstrapPrimary(deviceRepo.deviceId, android.os.Build.MODEL ?: "My phone").getOrThrow()
+        }
+        reconfigure()
+    }
+
     /** Max retry attempts before an operation is parked as FAILED. */
     private val maxRetries = 8
 
     /** Drain the event outbox + the operation queue, then pull remote changes. */
     suspend fun syncNow() {
+        // Auto-connect to the built-in backend first (bootstraps a session token if needed) so
+        // the user never has to press "Connect".
+        runCatching { ensureConnected() }
         mutex.withLock {
             val db = AppDatabase.get(context)
             val logDao = db.logDao()
@@ -124,10 +158,10 @@ class SyncManager(private val context: Context) {
             val pendingOps = opDao.byStatus(OpSyncStatus.PENDING)
 
             if (!client.isConfigured) {
-                // No backend: settle local queues so they don't grow unbounded. Data stays local.
-                pendingEvents.forEach { logDao.setSyncState(it.uuid, SyncState.SYNCED) }
-                pendingOps.forEach { opDao.setStatus(it.operationId, OpSyncStatus.SYNCED) }
-                publishStatus(SyncPhase.LOCAL_ONLY)
+                // Not signed in yet (e.g. offline on first launch, or bootstrap not done). Leave
+                // events PENDING so they upload automatically once we have a session token — never
+                // mark them synced locally or we'd lose them.
+                publishStatus(if (isOnline()) SyncPhase.SYNCING else SyncPhase.OFFLINE)
                 return
             }
 

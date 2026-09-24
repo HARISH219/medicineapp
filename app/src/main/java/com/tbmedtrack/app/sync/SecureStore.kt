@@ -25,8 +25,12 @@ class SecureStore(context: Context) {
         )
     }
 
+    /**
+     * Backend base URL. Defaults to the app's built-in backend so cloud sync is ALWAYS ON without
+     * the user entering anything. A stored value (from manual setup) overrides the default.
+     */
     var baseUrl: String?
-        get() = prefs.getString(KEY_BASE_URL, null)
+        get() = prefs.getString(KEY_BASE_URL, null) ?: DEFAULT_BASE_URL
         set(value) { prefs.edit().putString(KEY_BASE_URL, value).apply() }
 
     var sessionToken: String?
@@ -40,5 +44,8 @@ class SecureStore(context: Context) {
     companion object {
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_SESSION_TOKEN = "session_token"
+
+        /** Built-in backend so the app is always connected without any setup. */
+        const val DEFAULT_BASE_URL = "https://medicineapp-ashy.vercel.app"
     }
 }
