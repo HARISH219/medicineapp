@@ -997,7 +997,7 @@ function devicesHtml() {
 <title>MedTrack — Devices & Sync</title>
 <style>
   :root{
-    --bg:#F4F5F9;--surface:#FFFFFF;--line:#E7E9F2;--line2:#EEF0F7;
+    --bg:#F4F5F9;--surface:#FFFFFF;--line:#E7E9F2;--line2:#EEF0F7;--subcard:#FCFCFE;
     --text:#1E2233;--text2:#5A6072;--muted:#8A90A2;
     --purple:#6D4AFF;--purple-ink:#5A38F0;--purple-soft:#F1EEFF;
     --green:#16A34A;--green-soft:#E7F6EC;
@@ -1005,6 +1005,15 @@ function devicesHtml() {
     --red:#DC2626;--red-soft:#FCEBEB;--gray:#9AA0AE;
     --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.05);
     --shadow-lg:0 8px 24px rgba(16,24,40,.10);--radius:14px;
+  }
+  html[data-theme="dark"]{
+    --bg:#0E1117;--surface:#171B24;--line:#2A2F3C;--line2:#242936;--subcard:#1C2130;
+    --text:#EAEDF5;--text2:#AEB4C4;--muted:#8890A2;
+    --purple:#8B74FF;--purple-ink:#A08CFF;--purple-soft:#241F3D;
+    --green:#34D07A;--green-soft:#12321F;
+    --amber:#F0A94A;--amber-soft:#3A2A12;
+    --red:#F26D6D;--red-soft:#3A1B1B;--gray:#6B7385;
+    --shadow:0 1px 2px rgba(0,0,0,.4);--shadow-lg:0 10px 30px rgba(0,0,0,.5);
   }
   *{box-sizing:border-box}
   html,body{margin:0}
@@ -1082,7 +1091,11 @@ function devicesHtml() {
 
   /* Status sub-cards grid */
   .subgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-  .subcard{border:1px solid var(--line2);border-radius:12px;padding:14px;background:#FCFCFE}
+  .subcard{border:1px solid var(--line2);border-radius:12px;padding:14px;background:var(--subcard)}
+  .themebtn{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:var(--surface);
+    color:var(--text2);font-size:18px;display:inline-flex;align-items:center;justify-content:center;
+    transition:background .15s,color .15s}
+  .themebtn:hover{background:var(--bg);color:var(--text)}
   .subcard .lbl{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;margin-bottom:8px}
   .subcard .lbl .ic{color:var(--purple)}
   .subcard .val{font-weight:600;font-size:13px}
@@ -1195,7 +1208,18 @@ function devicesHtml() {
     .tablewrap table{display:none}
     .cards-mobile{display:flex;flex-direction:column;gap:12px}
   }
-</style></head>
+</style>
+<script>
+  // Apply saved theme before first paint to avoid a flash of the wrong theme.
+  (function(){
+    try{
+      var saved=localStorage.getItem("medtrack_theme");
+      if(!saved){ saved = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark":"light"; }
+      document.documentElement.setAttribute("data-theme", saved);
+    }catch(e){ document.documentElement.setAttribute("data-theme","light"); }
+  })();
+</script>
+</head>
 <body>
 <div class="app">
   <!-- Sidebar -->
@@ -1218,7 +1242,7 @@ function devicesHtml() {
     <div class="topbar">
       <button class="iconbtn" onclick="toggleNav(true)" aria-label="Open menu">☰</button>
       <div class="brand"><span class="mark" style="width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,#7C5CFF,#6D4AFF);display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px">✚</span>MedTrack</div>
-      <button class="iconbtn" aria-label="Notifications">🔔</button>
+      <button class="iconbtn" id="themeBtnM" onclick="toggleTheme()" aria-label="Toggle dark theme">🌙</button>
     </div>
 
     <div class="content">
@@ -1239,8 +1263,11 @@ function devicesHtml() {
             <p>Manage your authorized devices and monitor synchronization status.</p>
           </div>
           <div class="right">
-            <div class="updated">Last updated:<br><b id="lastUpdated">—</b></div>
-            <button class="btn btn-primary" id="checkBtn" onclick="checkSync()"><span id="checkIc">↻</span> Check Sync</button>
+            <div style="display:flex;gap:10px;align-items:center">
+              <button class="themebtn" id="themeBtn" onclick="toggleTheme()" aria-label="Toggle dark theme" title="Toggle dark theme">🌙</button>
+              <button class="btn btn-primary" id="checkBtn" onclick="checkSync()"><span id="checkIc">↻</span> Check Sync</button>
+            </div>
+            <div class="updated">Last updated: <b id="lastUpdated">—</b></div>
           </div>
         </div>
 
@@ -1387,6 +1414,20 @@ function devicesHtml() {
   function toggleNav(open){
     document.getElementById("sidebar").classList.toggle("open", open);
     document.getElementById("scrim").classList.toggle("show", open);
+  }
+
+  // --- Theme toggle (persisted in localStorage) ---
+  function applyTheme(mode){
+    document.documentElement.setAttribute("data-theme", mode);
+    var icon = mode==="dark" ? "☀️" : "🌙";
+    var d=document.getElementById("themeBtn"), m=document.getElementById("themeBtnM");
+    if(d) d.textContent=icon;
+    if(m) m.textContent=icon;
+    try{ localStorage.setItem("medtrack_theme", mode); }catch(e){}
+  }
+  function toggleTheme(){
+    var cur=document.documentElement.getAttribute("data-theme")==="dark"?"dark":"light";
+    applyTheme(cur==="dark"?"light":"dark");
   }
   // Single-click sidebar navigation: scroll to the section, highlight it, close the mobile drawer.
   function navTo(id, el){
@@ -1633,6 +1674,9 @@ function devicesHtml() {
         document.getElementById("dash").style.display="none";
         if(KEY) document.getElementById("gateErr").style.display="block"; });
   }
+  // Sync the toggle icon with the theme applied pre-paint.
+  applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"dark":"light");
+
   if(!KEY){ document.getElementById("gate").style.display="block"; }
   else { load(); setInterval(load, 30000); }
 </script>
