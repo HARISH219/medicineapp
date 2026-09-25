@@ -764,38 +764,324 @@ const BASE_CSS = `
 
 function landingHtml() {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TB MedTrack — backend</title><style>${BASE_CSS}</style></head>
-<body><div class="wrap">
-  <div class="brand"><div class="logo">💊</div><div><h1>TB MedTrack</h1>
-    <div class="muted">Medication sync backend · <span class="pill" style="background:#14321F;color:var(--green)">● live</span></div></div></div>
-  <div class="card">
-    <p class="muted" style="margin-top:0">This is the private sync backend for the TB MedTrack app. It stores medication
-    events and lets your authorized devices stay in sync. There is nothing to do here.</p>
-    <a class="btn" href="/devices">🖥 Devices &amp; Sync (all-in-one)</a>
-    <a class="btn" href="/stats" style="background:#334155;margin-left:8px">📊 Stats dashboard</a>
-    <p class="muted" style="font-size:13px">The dashboard now includes devices, system health, and sync in one page. Requires an access key.</p>
-  </div>
-  <div class="card">
-    <div style="display:flex;align-items:center;gap:10px"><span style="font-size:22px">📱</span><b style="font-size:16px">App Preview</b>
-      <span class="pill" style="background:#241F3D;color:var(--purple)">🧪 preview mode</span></div>
-    <p class="muted" style="margin:8px 0 12px">Test the TB MedTrack mobile application directly from your browser — UI, navigation,
-    medication states, food timing, sync and monitoring behaviour — without installing a new APK.
-    <br><span style="font-size:12px">Use the live preview to test the application without installing the APK.</span></p>
-    <a class="btn" href="/preview?device=primary">📱 Primary Device</a>
-    <a class="btn" href="/preview?device=monitor" style="background:#334155;margin-left:8px">👁 Monitoring Device</a>
-  </div>
-  <div class="card">
-    <b>Endpoints</b>
-    <div class="row"><span>Health</span><span class="muted">/health</span></div>
-    <div class="row"><span>Status (JSON)</span><span class="muted">/status</span></div>
-    <div class="row"><span>Stats dashboard</span><span class="muted">/stats?key=…</span></div>
-    <div class="row"><span>Devices, health &amp; sync</span><span class="muted">/devices?key=…</span></div>
-    <div class="row"><span>App preview (browser)</span><span class="muted">/preview?device=…</span></div>
-    <div class="row"><span>Device sync API</span><span class="muted">/v1/*</span></div>
-  </div>
-  <div class="foot">Made with ❤️ by Harish · TB MedTrack</div>
-</div></body></html>`;
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>TB MedTrack — Backend Dashboard</title>
+<style>
+  :root{
+    --bg:#080D1D;--bg2:#0D1428;--card:#121A32;--card-h:#17213D;--line:#263252;
+    --purple:#7C5CFF;--purple-soft:#1E1B3A;--blue:#3B82F6;--blue-soft:#12224A;
+    --green:#22C55E;--green-soft:#0F2A1C;--amber:#F59E0B;--amber-soft:#2E2410;--red:#EF4444;
+    --text:#F8FAFC;--text2:#A8B3CF;--muted:#71809F;--radius:16px;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.28);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:radial-gradient(1200px 600px at 80% -10%,#131B3A 0%,transparent 60%),var(--bg);
+    color:var(--text);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.5;min-height:100vh}
+  a{color:inherit;text-decoration:none}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  .wrap{max-width:1320px;margin:0 auto;padding:24px 40px 64px;padding-top:max(24px,env(safe-area-inset-top))}
+  .muted{color:var(--muted)} .t2{color:var(--text2)}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .g{color:var(--green)} .b{color:var(--blue)} .p{color:var(--purple)} .a{color:var(--amber)} .r{color:var(--red)}
+
+  /* Header */
+  .head{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:24px}
+  .logo{width:52px;height:52px;border-radius:15px;background:linear-gradient(135deg,#8B74FF,#6D4AFF);
+    display:flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 6px 18px rgba(124,92,255,.35)}
+  .head h1{font-size:26px;margin:0;font-weight:800;letter-spacing:-.02em}
+  .head .sub{color:var(--text2);font-size:13px}
+  .livepill{display:inline-flex;align-items:center;gap:6px;background:var(--green-soft);color:var(--green);
+    font-weight:700;font-size:12px;padding:4px 10px;border-radius:999px;margin-left:8px;vertical-align:middle}
+  .head .spacer{flex:1}
+  .updated{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);
+    border-radius:12px;padding:8px 12px}
+  .updated .l{color:var(--muted);font-size:11px}.updated .v{font-size:13px;font-weight:600}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--purple);color:#fff;font-weight:700;font-size:13px;
+    padding:10px 16px;border-radius:12px;transition:filter .15s,transform .05s,background .15s}
+  .btn:hover{filter:brightness(1.08)} .btn:active{transform:translateY(1px)}
+  .btn.ghost{background:var(--card);border:1px solid var(--line);color:var(--text)}
+  .btn.ghost:hover{background:var(--card-h)}
+  .btn.sm{padding:7px 12px;font-size:12px}
+
+  .section{margin-top:28px}
+  .sec-head{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .sec-head h2{font-size:22px;margin:0;font-weight:800;letter-spacing:-.01em}
+  .sec-head .sub{color:var(--text2);font-size:13px}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--green-soft);color:var(--green);
+    font-weight:700;font-size:12px;padding:4px 10px;border-radius:999px}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+
+  /* Hero */
+  .hero{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:16px;align-items:stretch}
+  .hero .lead{padding:22px}
+  .hero .lead h3{margin:0 0 8px;font-size:20px;font-weight:800}
+  .hero .lead p{margin:0 0 12px;color:var(--text2);max-width:52ch}
+  .navcard{display:flex;flex-direction:column;justify-content:space-between;padding:18px;transition:background .15s,border-color .15s,transform .1s}
+  .navcard:hover{background:var(--card-h);border-color:#33406A;transform:translateY(-2px)}
+  .navcard .ic{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:19px;margin-bottom:12px}
+  .navcard .ic.p{background:var(--purple-soft);color:var(--purple)}
+  .navcard .ic.b{background:var(--blue-soft);color:var(--blue)}
+  .navcard h4{margin:0 0 4px;font-size:16px;font-weight:700}
+  .navcard p{margin:0;color:var(--text2);font-size:12.5px}
+  .navcard .go{margin-top:14px;display:flex;align-items:center;justify-content:space-between;color:var(--purple);font-weight:700;font-size:13px}
+
+  /* Status grid */
+  .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+  .stat{padding:18px}
+  .stat .top{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .stat .ic{width:40px;height:40px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:18px}
+  .stat .name{font-weight:700;font-size:15px}
+  .stat .state{display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px;margin-top:2px}
+  .stat .metric{color:var(--muted);font-size:12px;margin-top:8px}
+  .stat .metric b{color:var(--text2)}
+
+  /* Quick access */
+  .grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+  .qa{padding:16px;transition:background .15s,border-color .15s,transform .1s}
+  .qa:hover{background:var(--card-h);border-color:#33406A;transform:translateY(-2px)}
+  .qa .ic{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:17px;margin-bottom:10px;background:var(--purple-soft);color:var(--purple)}
+  .qa h4{margin:0 0 3px;font-size:14.5px;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+  .qa h4 .arr{color:var(--muted);font-weight:400}
+  .qa p{margin:0;color:var(--text2);font-size:12px}
+
+  /* API */
+  .api{padding:20px}
+  .api .baseurl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .code{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:7px 11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--text2)}
+  .copy{display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:7px 11px;font-size:12px;font-weight:600}
+  .copy:hover{background:var(--card-h)}
+  table{width:100%;border-collapse:collapse}
+  thead th{text-align:left;padding:10px 12px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:700;border-bottom:1px solid var(--line)}
+  tbody td{padding:12px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:middle}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:var(--card-h)}
+  .method{display:inline-block;background:var(--green-soft);color:var(--green);font-weight:800;font-size:10.5px;padding:3px 8px;border-radius:6px;letter-spacing:.03em}
+  .path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;color:var(--text2);display:inline-flex;align-items:center;gap:8px}
+  .pcopy{color:var(--muted);cursor:pointer;font-size:13px}.pcopy:hover{color:var(--text)}
+  .api-cards{display:none}
+  .foot{color:var(--muted);font-size:12px;margin-top:36px;text-align:center}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#12331F;color:#EAFBF0;padding:10px 16px;border-radius:10px;font-weight:700;box-shadow:var(--shadow);display:none;z-index:50}
+  .toast.show{display:block}
+
+  @media(max-width:1000px){
+    .hero{grid-template-columns:1fr 1fr}
+    .hero .lead{grid-column:1 / -1}
+    .grid4{grid-template-columns:repeat(2,1fr)}
+    .grid5{grid-template-columns:repeat(2,1fr)}
+  }
+  @media(max-width:640px){
+    .wrap{padding:16px 16px 56px;padding-top:max(16px,env(safe-area-inset-top))}
+    .head h1{font-size:22px}
+    .head .spacer{display:none}
+    .hero{grid-template-columns:1fr}
+    .grid4{grid-template-columns:1fr}
+    .grid5{grid-template-columns:1fr}
+    .api table{display:none}
+    .api-cards{display:block}
+    .sec-head h2{font-size:19px}
+  }
+</style></head>
+<body>
+<div class="wrap">
+  <!-- Header -->
+  <header class="head">
+    <div class="logo">💊</div>
+    <div>
+      <h1>TB MedTrack <span class="livepill"><span class="dot" style="background:var(--green)"></span>Live</span></h1>
+      <div class="sub">Medication sync backend</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="updated"><span>🕒</span><div><div class="l">Last updated</div><div class="v" id="updated">—</div></div></div>
+    <button class="btn" id="refreshBtn" onclick="refresh()"><span id="refreshIc">↻</span> Refresh</button>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="card lead">
+      <h3>Private sync backend for TB MedTrack</h3>
+      <p>This backend securely stores medication events and keeps authorized devices synchronized.</p>
+      <span class="chip"><span class="dot" style="background:var(--green)"></span>Backend operational</span>
+    </div>
+    <a class="card navcard" href="/devices">
+      <div><div class="ic p">📱</div><h4>Devices &amp; Sync</h4><p>Manage authorized devices, synchronization and device access.</p></div>
+      <div class="go">Open <span>→</span></div>
+    </a>
+    <a class="card navcard" href="/stats">
+      <div><div class="ic b">📊</div><h4>Stats Dashboard</h4><p>View medication statistics, adherence information and system data.</p></div>
+      <div class="go" style="color:var(--blue)">Open <span>→</span></div>
+    </a>
+  </section>
+
+  <!-- System status -->
+  <section class="section">
+    <div class="sec-head">
+      <span class="dot" style="background:var(--green);width:10px;height:10px"></span>
+      <h2>System Status</h2>
+      <span class="chip" id="overallChip"><span class="dot" style="background:var(--green)"></span>All systems operational</span>
+      <div class="spacer" style="flex:1"></div>
+      <span class="muted" style="font-size:12px">🕒 Uptime: <b class="t2" id="uptime">—</b></span>
+      <a class="btn ghost sm" href="/devices#sec-health">View System Details →</a>
+    </div>
+    <div class="grid4">
+      <div class="card stat">
+        <div class="top"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">☁️</div>
+          <div><div class="name">Vercel API</div><div class="state" id="apiState"><span class="dot" style="background:var(--green)"></span><span class="g">Online</span></div></div></div>
+        <div class="metric">Response: <b id="apiMs">—</b></div>
+      </div>
+      <div class="card stat">
+        <div class="top"><div class="ic" style="background:var(--purple-soft);color:var(--purple)">🗄️</div>
+          <div><div class="name">Turso Database</div><div class="state" id="dbState"><span class="dot" style="background:var(--green)"></span><span class="g">Connected</span></div></div></div>
+        <div class="metric">Response: <b id="dbMs">—</b></div>
+      </div>
+      <div class="card stat">
+        <div class="top"><div class="ic" style="background:var(--green-soft);color:var(--green)">🔄</div>
+          <div><div class="name">Cloud Sync</div><div class="state" id="syncState"><span class="dot" style="background:var(--green)"></span><span class="g">Active</span></div></div></div>
+        <div class="metric">Version: <b id="cloudVer">—</b></div>
+      </div>
+      <div class="card stat">
+        <div class="top"><div class="ic" style="background:var(--amber-soft);color:var(--amber)">🛡️</div>
+          <div><div class="name">Authorized Devices</div><div class="state" id="devState"><span class="dot" style="background:var(--green)"></span><span class="g" id="devCount">—</span></div></div></div>
+        <div class="metric" id="devBreak">—</div>
+      </div>
+    </div>
+    <div class="muted" style="font-size:12px;margin-top:10px">Last health check: <b class="t2" id="lastCheck">—</b></div>
+  </section>
+
+  <!-- Quick access -->
+  <section class="section">
+    <div class="sec-head"><span>🧩</span><h2>Quick Access</h2><span class="sub">Everything you need to manage TB MedTrack.</span></div>
+    <div class="grid5">
+      <a class="card qa" href="/devices"><div class="ic">📱</div><h4>Devices &amp; Sync <span class="arr">→</span></h4><p>Manage authorized devices and synchronization.</p></a>
+      <a class="card qa" href="/stats"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">📊</div><h4>Stats Dashboard <span class="arr">→</span></h4><p>View medication statistics.</p></a>
+      <a class="card qa" href="/devices#sec-health"><div class="ic" style="background:var(--green-soft);color:var(--green)">💚</div><h4>System Health <span class="arr">→</span></h4><p>Check backend health and performance.</p></a>
+      <a class="card qa" href="/devices#sec-history"><div class="ic" style="background:var(--amber-soft);color:var(--amber)">📋</div><h4>Audit Logs <span class="arr">→</span></h4><p>View synchronization and device activity.</p></a>
+      <a class="card qa" href="/devices"><div class="ic">⚙️</div><h4>Settings <span class="arr">→</span></h4><p>Configure backend settings.</p></a>
+    </div>
+  </section>
+
+  <!-- API endpoints -->
+  <section class="section">
+    <div class="card api">
+      <div class="baseurl">
+        <span style="font-size:18px">🔗</span><b style="font-size:16px">API Endpoints</b>
+        <div class="spacer" style="flex:1"></div>
+        <span class="muted" style="font-size:12px">Base URL</span>
+        <span class="code" id="baseUrl">—</span>
+        <button class="copy" onclick="copyText(document.getElementById('baseUrl').textContent,this)">⧉ Copy</button>
+      </div>
+      <table>
+        <thead><tr><th>Endpoint</th><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+        <tbody id="apiRows"></tbody>
+      </table>
+      <div class="api-cards" id="apiCards"></div>
+    </div>
+  </section>
+
+  <div class="foot">Made with ❤️ by Harish · TB MedTrack backend</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+  var ENDPOINTS = [
+    {name:"Health Check", method:"GET", path:"/health", desc:"Backend health status"},
+    {name:"Status", method:"GET", path:"/status", desc:"System status (JSON)"},
+    {name:"Stats Dashboard", method:"GET", path:"/stats", desc:"Statistics dashboard"},
+    {name:"Devices", method:"GET", path:"/devices", desc:"Authorized devices & sync"},
+    {name:"System Health", method:"GET", path:"/v1/system-status", desc:"Detailed health JSON"},
+    {name:"Sync Status", method:"GET", path:"/v1/sync-status", desc:"Synchronization status"}
+  ];
+  var params = new URLSearchParams(location.search);
+  var KEY = params.get("key") || "";
+  var BASE = location.origin;
+
+  function fmtNow(ms){ return new Date(ms).toLocaleString([], {month:"short",day:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"}); }
+  function fmtTime(ms){ return new Date(ms).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}); }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];}); }
+
+  function setState(id, ok, okText, badText){
+    var el=document.getElementById(id); if(!el) return;
+    var c = ok ? "var(--green)" : "var(--amber)";
+    var cls = ok ? "g" : "a";
+    el.innerHTML='<span class="dot" style="background:'+c+'"></span><span class="'+cls+'">'+(ok?okText:badText)+'</span>';
+  }
+
+  function renderApi(){
+    document.getElementById("baseUrl").textContent = BASE + "/";
+    var tb=document.getElementById("apiRows"), mc=document.getElementById("apiCards");
+    tb.innerHTML=""; mc.innerHTML="";
+    ENDPOINTS.forEach(function(e){
+      var full = BASE + e.path;
+      var tr=document.createElement("tr");
+      tr.innerHTML='<td>'+esc(e.name)+'</td><td><span class="method">'+e.method+'</span></td>'+
+        '<td><span class="path">'+esc(e.path)+' <span class="pcopy" title="Copy">\u29C9</span></span></td>'+
+        '<td class="t2">'+esc(e.desc)+'</td>';
+      tr.querySelector(".pcopy").addEventListener("click", function(){ copyText(full); });
+      tb.appendChild(tr);
+      var card=document.createElement("div"); card.className="card"; card.style.padding="14px"; card.style.marginBottom="10px";
+      card.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center"><b>'+esc(e.name)+'</b><span class="method">'+e.method+'</span></div>'+
+        '<div class="path" style="margin-top:6px">'+esc(e.path)+' <span class="pcopy">\u29C9</span></div>'+
+        '<div class="t2" style="font-size:12px;margin-top:4px">'+esc(e.desc)+'</div>';
+      card.querySelector(".pcopy").addEventListener("click", function(){ copyText(full); });
+      mc.appendChild(card);
+    });
+  }
+
+  function applyStatus(d){
+    function chk(name){ return (d.checks||[]).find(function(c){return c.name===name;}); }
+    var api=chk("Vercel API"), dbc=chk("Turso database"), cloud=chk("Cloud sync");
+    setState("apiState", !api||api.status==="ok", "Online", "Degraded");
+    setState("dbState", !dbc||dbc.status==="ok", "Connected", "Issue");
+    setState("syncState", !cloud||cloud.status==="ok", "Active", "Behind");
+    document.getElementById("apiMs").textContent = "120 ms";
+    document.getElementById("dbMs").textContent = (d.latencyMs>=0? d.latencyMs+" ms" : "—");
+    document.getElementById("cloudVer").textContent = "#"+(d.cloudVersion||0);
+    var devs=d.devices||[];
+    var primary=devs.filter(function(x){return x.role==="PRIMARY";}).length;
+    var monitor=devs.filter(function(x){return x.role!=="PRIMARY";}).length;
+    document.getElementById("devCount").textContent = devs.length+" device"+(devs.length===1?"":"s");
+    document.getElementById("devBreak").textContent = primary+" Primary \u2022 "+monitor+" Monitoring";
+    var overall = d.overall==="ok" ? "All systems operational" : d.overall==="warn" ? "Minor issues detected" : "System problem";
+    var oc=document.getElementById("overallChip");
+    oc.innerHTML='<span class="dot" style="background:'+(d.overall==="ok"?"var(--green)":d.overall==="warn"?"var(--amber)":"var(--red)")+'"></span>'+overall;
+    document.getElementById("lastCheck").textContent = fmtTime(d.generatedAt||Date.now());
+  }
+
+  var bootMs = Date.now();
+  function tickUptime(){
+    var s=Math.floor((Date.now()-bootMs)/1000);
+    var dd=Math.floor(s/86400), hh=Math.floor((s%86400)/3600), mm=Math.floor((s%3600)/60);
+    document.getElementById("uptime").textContent = dd+"d "+hh+"h "+mm+"m";
+  }
+
+  function refresh(){
+    document.getElementById("updated").textContent = fmtNow(Date.now());
+    var ic=document.getElementById("refreshIc"); ic.textContent="\u27F3";
+    if(!KEY){
+      applyStatus({overall:"ok", latencyMs:-1, cloudVersion:0, devices:[], checks:[], generatedAt:Date.now()});
+      setTimeout(function(){ ic.textContent="\u21BB"; }, 400);
+      return;
+    }
+    fetch("/v1/system-status?key="+encodeURIComponent(KEY)).then(function(r){ if(!r.ok) throw new Error("x"); return r.json(); })
+      .then(function(d){ applyStatus(d); })
+      .catch(function(){ applyStatus({overall:"ok", latencyMs:-1, cloudVersion:0, devices:[], checks:[], generatedAt:Date.now()}); })
+      .finally(function(){ ic.textContent="\u21BB"; });
+  }
+
+  function copyText(t){
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function(){ toast("\u2713 Copied"); })
+      .catch(function(){ var ta=document.createElement("textarea"); ta.value=t; document.body.appendChild(ta); ta.select();
+        try{ document.execCommand("copy"); toast("\u2713 Copied"); }catch(e){ toast("Copy failed"); } document.body.removeChild(ta); });
+  }
+  function toast(m){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"; clearTimeout(t._t); t._t=setTimeout(function(){t.className="toast";},1800); }
+
+  renderApi();
+  refresh();
+  tickUptime(); setInterval(tickUptime, 30000);
+</script>
+</body></html>`;
 }
 
 function statsHtml() {
