@@ -838,6 +838,21 @@ function landingHtml() {
   .stat .metric{color:var(--muted);font-size:12px;margin-top:8px}
   .stat .metric b{color:var(--text2)}
 
+  /* Statistics */
+  .stats-wrap{display:grid;grid-template-columns:1fr 1.4fr;gap:16px;align-items:stretch}
+  .ring{--p:0;width:120px;height:120px;border-radius:50%;flex-shrink:0;
+    background:conic-gradient(var(--green) calc(var(--p)*1%),#20294a 0);display:flex;align-items:center;justify-content:center}
+  .ring-in{width:92px;height:92px;border-radius:50%;background:var(--card);display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring-pct{font-size:26px;font-weight:800}
+  .ring-l{font-size:11px;color:var(--muted)}
+  .statgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .mini{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .mini .n{font-size:22px;font-weight:800}
+  .mini .l{font-size:12px;color:var(--muted);margin-top:2px}
+  .bars{display:flex;align-items:flex-end;gap:3px;height:120px}
+  .bar{flex:1;min-width:4px;display:flex;flex-direction:column;justify-content:flex-end;gap:1px;border-radius:4px 4px 0 0;overflow:hidden;background:#151d38}
+  .bar .tk{background:var(--green)} .bar .ms{background:var(--red)}
+
   /* Quick access */
   .grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
   .qa{padding:16px;transition:background .15s,border-color .15s,transform .1s}
@@ -879,10 +894,12 @@ function landingHtml() {
     .hero{grid-template-columns:1fr}
     .grid4{grid-template-columns:1fr}
     .grid5{grid-template-columns:1fr}
+    .stats-wrap{grid-template-columns:1fr}
     .api table{display:none}
     .api-cards{display:block}
     .sec-head h2{font-size:19px}
   }
+  @media(max-width:1000px){ .stats-wrap{grid-template-columns:1fr} }
 </style></head>
 <body>
 <div class="wrap">
@@ -948,6 +965,37 @@ function landingHtml() {
       </div>
     </div>
     <div class="muted" style="font-size:12px;margin-top:10px">Last health check: <b class="t2" id="lastCheck">—</b></div>
+  </section>
+
+  <!-- Medication statistics -->
+  <section class="section" id="statsSection">
+    <div class="sec-head">
+      <span>📊</span><h2>Medication Statistics</h2>
+      <span class="sub">Adherence and dose activity across all synced devices.</span>
+      <div class="spacer" style="flex:1"></div>
+      <a class="btn ghost sm" href="/stats" id="statsFullLink">Full stats →</a>
+    </div>
+    <div class="stats-wrap">
+      <!-- Adherence + numbers -->
+      <div class="card" style="padding:20px;display:grid;grid-template-columns:auto 1fr;gap:22px;align-items:center">
+        <div class="ring" id="adhRing"><div class="ring-in"><div class="ring-pct" id="adhPct">—</div><div class="ring-l">Adherence</div></div></div>
+        <div class="statgrid">
+          <div class="mini"><div class="n g" id="stTaken">—</div><div class="l">Taken</div></div>
+          <div class="mini"><div class="n r" id="stMissed">—</div><div class="l">Missed</div></div>
+          <div class="mini"><div class="n a" id="stLate">—</div><div class="l">Late</div></div>
+          <div class="mini"><div class="n" id="stTotal">—</div><div class="l">Total events</div></div>
+        </div>
+      </div>
+      <!-- 30-day chart -->
+      <div class="card" style="padding:20px">
+        <div class="row2" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <b style="font-size:14px">Last 30 days</b>
+          <span class="muted" style="font-size:11px"><span class="g">■</span> Taken &nbsp; <span class="r">■</span> Missed</span>
+        </div>
+        <div class="bars" id="statBars"></div>
+        <div id="statsNote" class="muted" style="font-size:12px;margin-top:10px;display:none"></div>
+      </div>
+    </div>
   </section>
 
   <!-- Quick access -->
@@ -1059,6 +1107,7 @@ function landingHtml() {
   function refresh(){
     document.getElementById("updated").textContent = fmtNow(Date.now());
     var ic=document.getElementById("refreshIc"); ic.textContent="\u27F3";
+    if(typeof loadStats==="function") loadStats();
     if(!KEY){
       applyStatus({overall:"ok", latencyMs:-1, cloudVersion:0, devices:[], checks:[], generatedAt:Date.now()});
       setTimeout(function(){ ic.textContent="\u21BB"; }, 400);
@@ -1077,8 +1126,43 @@ function landingHtml() {
   }
   function toast(m){ var t=document.getElementById("toast"); t.textContent=m; t.className="toast show"; clearTimeout(t._t); t._t=setTimeout(function(){t.className="toast";},1800); }
 
+  function renderStats(s){
+    var pct = s.adherencePercent || 0;
+    var ring=document.getElementById("adhRing"); ring.style.setProperty("--p", pct);
+    document.getElementById("adhPct").textContent = pct + "%";
+    document.getElementById("stTaken").textContent = s.taken || 0;
+    document.getElementById("stMissed").textContent = s.missed || 0;
+    document.getElementById("stLate").textContent = s.lateTaken || 0;
+    document.getElementById("stTotal").textContent = s.totalEvents || 0;
+    var wrap=document.getElementById("statBars"); wrap.innerHTML="";
+    var days=(s.days||[]);
+    var max=1; days.forEach(function(d){ if(d.total>max) max=d.total; });
+    if(!days.length){ wrap.innerHTML='<div class="muted" style="font-size:12px">No dose activity recorded yet.</div>'; return; }
+    days.forEach(function(d){
+      var bar=document.createElement("div"); bar.className="bar"; bar.title=d.day+" · "+d.taken+" taken / "+d.missed+" missed";
+      var th=Math.round((d.taken/max)*100), mh=Math.round((d.missed/max)*100);
+      bar.innerHTML='<div class="ms" style="height:'+mh+'%"></div><div class="tk" style="height:'+th+'%"></div>';
+      wrap.appendChild(bar);
+    });
+  }
+  function statsNeedKey(){
+    document.getElementById("adhPct").textContent="—";
+    document.getElementById("statBars").innerHTML="";
+    var n=document.getElementById("statsNote"); n.style.display="block";
+    n.innerHTML='Medication statistics require the access key. Open <b>/?key=&lt;STATS_KEY&gt;</b> to view live numbers.';
+  }
+  function loadStats(){
+    if(!KEY){ statsNeedKey(); return; }
+    document.getElementById("statsNote").style.display="none";
+    document.getElementById("statsFullLink").href = "/stats?key=" + encodeURIComponent(KEY);
+    fetch("/v1/public-stats?key="+encodeURIComponent(KEY)).then(function(r){ if(!r.ok) throw new Error("x"); return r.json(); })
+      .then(function(s){ renderStats(s); })
+      .catch(function(){ var n=document.getElementById("statsNote"); n.style.display="block"; n.textContent="Could not load statistics."; });
+  }
+
   renderApi();
   refresh();
+  loadStats();
   tickUptime(); setInterval(tickUptime, 30000);
 </script>
 </body></html>`;
