@@ -195,7 +195,7 @@ fun AddEditScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
-        FreqChip("Part of my TB treatment", state.partOfTbRegimen) {
+        FreqChip("Part of my treatment", state.partOfTbRegimen) {
             vm.update { it.copy(partOfTbRegimen = !it.partOfTbRegimen) }
         }
 

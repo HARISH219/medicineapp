@@ -1,4 +1,4 @@
-# Deploy the TB MedTrack backend on Vercel (free Hobby plan)
+# Deploy the MedTrack backend on Vercel (free Hobby plan)
 
 Vercel runs the backend as a **serverless function** (`api/index.js`), which imports the same
 Express app used for local/Railway. It's free for personal use and fine for this app: reminders

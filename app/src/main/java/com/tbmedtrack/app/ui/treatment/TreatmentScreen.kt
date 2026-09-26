@@ -87,8 +87,8 @@ fun TreatmentScreen(
     if (tbMeds.isEmpty()) {
         EmptyState(
             icon = Icons.Outlined.MedicalServices,
-            title = "No TB treatment set up",
-            subtitle = "Add medicines and mark them as part of your TB treatment to track your regimen here."
+            title = "No treatment set up",
+            subtitle = "Add medicines and mark them as part of your treatment to track your regimen here."
         )
         return
     }
@@ -127,7 +127,7 @@ fun TreatmentScreen(
 
         item {
             SectionCard {
-                Text("MY TB TREATMENT", style = MaterialTheme.typography.labelLarge,
+                Text("MY TREATMENT", style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(6.dp))
                 Text("Current regimen (${tbMeds.size} ${if (tbMeds.size == 1) "medicine" else "medicines"})",
@@ -141,7 +141,7 @@ fun TreatmentScreen(
 
         item {
             Text(
-                "TB MedTrack does not decide which medicines or doses are correct. " +
+                "MedTrack does not decide which medicines or doses are correct. " +
                     "Enter and follow the treatment prescribed by your healthcare professional.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

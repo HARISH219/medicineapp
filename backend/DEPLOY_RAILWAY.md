@@ -1,4 +1,4 @@
-# Deploy the TB MedTrack backend on Railway
+# Deploy the MedTrack backend on Railway
 
 This is the small server that holds your Turso token and lets your devices sync. Follow the
 steps in order. It takes ~15 minutes and runs on Railway's free/hobby tier.

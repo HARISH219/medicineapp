@@ -177,7 +177,7 @@ object NotificationHelper {
                 append(com.tbmedtrack.app.util.ScheduleUtil.formatTime(timeMinutes))
                 append(" medication has not been recorded as taken.\n")
             } else {
-                append("Today's TB medication combination is ready.\n")
+                append("Today's medication combination is ready.\n")
             }
             append("Today's combination: $count ${if (count == 1) "medicine" else "medicines"}")
             if (medicineNames.isNotEmpty()) {

@@ -69,6 +69,7 @@ class AlarmReceiver : BroadcastReceiver() {
         foodMillis: Long,
         early: Boolean
     ) {
+        if (!isPrimaryDevice(context)) return
         val repo = ServiceLocator.medRepository(context)
         // If already recorded, don't nag.
         if (!repo.isEventPending(epochDay, timeMinutes)) return
@@ -102,6 +103,7 @@ class AlarmReceiver : BroadcastReceiver() {
         scheduledMillis: Long,
         escalation: Int
     ) {
+        if (!isPrimaryDevice(context)) return
         val repo = ServiceLocator.medRepository(context)
         val critical = ServiceLocator.criticalAlarmScheduler(context)
 
@@ -147,6 +149,7 @@ class AlarmReceiver : BroadcastReceiver() {
     }
 
     private suspend fun handle(context: Context, scheduleId: Long, scheduledMillis: Long) {
+        if (!isPrimaryDevice(context)) return
         val db = AppDatabase.get(context)
         val sch = db.medicineDao().getSchedule(scheduleId) ?: return
         val med = db.medicineDao().getMedicine(sch.medicineId) ?: return
@@ -179,7 +182,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 val count = doses.size
                 val title = "💊 Medication reminder"
                 val body = if (count > 1) {
-                    "Your $count scheduled TB medicines are due now (${ScheduleUtil.formatTime(sch.timeMinutes)})."
+                    "Your $count scheduled medicines are due now (${ScheduleUtil.formatTime(sch.timeMinutes)})."
                 } else {
                     "${med.name} (${med.dose} ${med.unit}) is due now."
                 }
@@ -200,5 +203,13 @@ class AlarmReceiver : BroadcastReceiver() {
         // Schedule the next occurrence (starting just after this one).
         val scheduler = ServiceLocator.alarmScheduler(context)
         scheduler.scheduleNextFor(med.id, scheduleId, scheduledMillis + 60_000L)
+    }
+
+    private suspend fun isPrimaryDevice(context: Context): Boolean {
+        val settings = runCatching {
+            ServiceLocator.settingsRepository(context).settings.first()
+        }.getOrNull() ?: return false
+        return settings.setupWizardDone &&
+            settings.deviceRole == com.tbmedtrack.app.data.settings.DeviceRoleValue.MAIN
     }
 }

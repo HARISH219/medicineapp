@@ -1,4 +1,4 @@
-# TB MedTrack — Sync Backend & Turso + FCM Integration
+# MedTrack — Sync Backend & Turso + FCM Integration
 
 The Android app works **fully offline on its own**: reminders, escalating critical alarms,
 recording doses, history, calendar, statistics, and reboot recovery all run locally with no

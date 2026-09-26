@@ -289,6 +289,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             foodRepo.recordFood()
             ServiceLocator.foodGapScheduler(getApplication()).rescheduleForToday()
+            // Food is part of the primary-authored read-only monitor snapshot.
+            ServiceLocator.syncManager(getApplication()).queue()
             com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(getApplication())
             refresh()
         }

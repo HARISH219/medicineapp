@@ -6,6 +6,7 @@ import android.content.Intent
 import com.tbmedtrack.app.ServiceLocator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -25,9 +26,18 @@ class BootReceiver : BroadcastReceiver() {
                     try {
                         NotificationHelper.ensureChannel(context)
                         ServiceLocator.deviceRepository(context).ensureRegistered()
-                        ServiceLocator.alarmScheduler(context).rescheduleAll()
-                        ServiceLocator.criticalAlarmScheduler(context).rescheduleTodayAndFuture()
-                        ServiceLocator.foodGapScheduler(context).rescheduleForToday()
+                        val settings = ServiceLocator.settingsRepository(context).settings.first()
+                        if (settings.setupWizardDone &&
+                            settings.deviceRole == com.tbmedtrack.app.data.settings.DeviceRoleValue.MAIN
+                        ) {
+                            ServiceLocator.alarmScheduler(context).rescheduleAll()
+                            ServiceLocator.criticalAlarmScheduler(context).rescheduleTodayAndFuture()
+                            ServiceLocator.foodGapScheduler(context).rescheduleForToday()
+                        } else {
+                            // Monitoring devices are read-only and never own patient alarms.
+                            ServiceLocator.syncManager(context).reconfigure()
+                            ServiceLocator.syncManager(context).syncNow()
+                        }
                     } finally {
                         pending.finish()
                     }

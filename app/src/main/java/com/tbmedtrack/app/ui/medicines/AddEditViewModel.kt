@@ -136,6 +136,7 @@ class AddEditViewModel(app: Application) : AndroidViewModel(app) {
             scheduler.cancelForMedicine(id)
             val saved = repo.getMedicineWithSchedules(id)
             saved?.schedules?.forEach { scheduler.scheduleNextFor(id, it.id) }
+            ServiceLocator.syncManager(getApplication()).queue()
             _state.value = _state.value.copy(loading = false, saved = true)
         }
     }

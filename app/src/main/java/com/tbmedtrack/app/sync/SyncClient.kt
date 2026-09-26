@@ -1,6 +1,7 @@
 package com.tbmedtrack.app.sync
 
 import com.tbmedtrack.app.data.db.MedicationLog
+import kotlinx.serialization.Serializable
 
 /**
  * Abstraction over the cloud sync backend. The app talks only to this interface, never
@@ -36,6 +37,12 @@ interface SyncClient {
 
     /** Cloud sync-version status: the cloud's latest version + each device's acked version. */
     suspend fun syncStatus(): Result<CloudSyncStatus>
+
+    /** PRIMARY publishes concrete scheduled occurrences + food history for read-only monitors. */
+    suspend fun uploadMonitorSnapshot(snapshot: MonitorSnapshot): Result<Unit>
+
+    /** MONITOR downloads the primary-authored read-only projection. */
+    suspend fun downloadMonitorSnapshot(): Result<MonitorSnapshot>
 }
 
 data class AuthCode(val code: String, val expiresAtMillis: Long)
@@ -58,6 +65,38 @@ data class CloudSyncStatus(
     val devices: List<RemoteDeviceStatus>
 )
 
+/** One concrete dose occurrence calculated and published by the PRIMARY device. */
+@Serializable
+data class MonitorDose(
+    val occurrenceId: String,
+    val medicineName: String,
+    val doseText: String,
+    val scheduledAt: Long,
+    val scheduledEpochDay: Long,
+    val status: String,
+    val takenAt: Long?,
+    val eligibleAt: Long,
+    val criticalAt: Long
+)
+
+/** A food event recorded on the PRIMARY device and displayed read-only on monitors. */
+@Serializable
+data class MonitorFoodEvent(
+    val uuid: String,
+    val foodAt: Long,
+    val recordedAt: Long,
+    /** the medicine gap (minutes) configured on the primary; 0 if none. Authoritative. */
+    val gapMinutes: Int = 0
+)
+
+@Serializable
+data class MonitorSnapshot(
+    val version: Long = 0L,
+    val doses: List<MonitorDose> = emptyList(),
+    val foodEvents: List<MonitorFoodEvent> = emptyList(),
+    val emergencyContact: String = ""
+)
+
 /**
  * Local-only no-op implementation. Everything the user does works and is stored locally;
  * sync operations succeed as no-ops. Swap in [RemoteSyncClient] once a backend is deployed.
@@ -75,4 +114,6 @@ class NoopSyncClient : SyncClient {
     override suspend fun revokeDevice(deviceId: String): Result<Unit> = Result.success(Unit)
     override suspend fun syncStatus(): Result<CloudSyncStatus> =
         Result.failure(IllegalStateException("No sync backend configured"))
+    override suspend fun uploadMonitorSnapshot(snapshot: MonitorSnapshot): Result<Unit> = Result.success(Unit)
+    override suspend fun downloadMonitorSnapshot(): Result<MonitorSnapshot> = Result.success(MonitorSnapshot())
 }

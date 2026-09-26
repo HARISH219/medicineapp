@@ -6,14 +6,23 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import com.tbmedtrack.app.ServiceLocator
+import com.tbmedtrack.app.data.RegimenSeeder
 import com.tbmedtrack.app.data.db.DeviceRole
 import com.tbmedtrack.app.data.settings.DeviceRoleValue
+import com.tbmedtrack.app.reminder.AlarmHealthWorker
+import com.tbmedtrack.app.sync.MonitorSyncWorker
 import com.tbmedtrack.app.util.PermissionUtil
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 
 /** Live readiness of each required permission (recomputed on resume). */
 data class WizardPermissionState(
@@ -87,6 +96,15 @@ class SetupWizardViewModel(app: Application) : AndroidViewModel(app) {
             settings.setDeviceRole(DeviceRoleValue.MAIN)
             deviceRepo.setRole(DeviceRole.PRIMARY)
             settings.setSetupWizardDone(true)
+            val app = getApplication<Application>()
+            WorkManager.getInstance(app).cancelUniqueWork("monitor_sync")
+            schedulePrimaryHealthCheck()
+            RegimenSeeder(ServiceLocator.medRepository(app), settings).seedIfNeeded()
+            ServiceLocator.alarmScheduler(app).rescheduleAll()
+            ServiceLocator.criticalAlarmScheduler(app).rescheduleTodayAndFuture()
+            ServiceLocator.foodGapScheduler(app).rescheduleForToday()
+            syncManager.reconfigure()
+            runCatching { syncManager.syncNow() }
             onDone()
         }
     }
@@ -100,7 +118,10 @@ class SetupWizardViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             _connect.value = ConnectState(connecting = true)
-            // Redeem through the sync layer; requires a configured backend URL on this device.
+            // Persist monitor intent BEFORE redeeming so the post-pair sync can never enter the
+            // PRIMARY path or upload pre-existing local rows.
+            settings.setDeviceRole(DeviceRoleValue.SECONDARY)
+            deviceRepo.setRole(DeviceRole.MONITOR)
             val result = runCatching {
                 syncManager.reconfigure()
                 syncManager.redeemCode(clean, android.os.Build.MODEL ?: "Monitor")
@@ -108,9 +129,10 @@ class SetupWizardViewModel(app: Application) : AndroidViewModel(app) {
             result.fold(
                 onSuccess = { ok ->
                     if (ok) {
-                        settings.setDeviceRole(DeviceRoleValue.SECONDARY)
-                        deviceRepo.setRole(DeviceRole.MONITOR)
                         settings.setSetupWizardDone(true)
+                        syncManager.reconfigure()
+                        runCatching { syncManager.syncNow() }
+                        scheduleMonitorSync()
                         _connect.value = ConnectState(connected = true)
                         onDone()
                     } else {
@@ -122,6 +144,30 @@ class SetupWizardViewModel(app: Application) : AndroidViewModel(app) {
                 }
             )
         }
+    }
+
+    private fun schedulePrimaryHealthCheck() {
+        val app = getApplication<Application>()
+        val request = PeriodicWorkRequestBuilder<AlarmHealthWorker>(1, TimeUnit.HOURS).build()
+        WorkManager.getInstance(app).enqueueUniquePeriodicWork(
+            "alarm_health_check",
+            ExistingPeriodicWorkPolicy.KEEP,
+            request
+        )
+    }
+
+    private fun scheduleMonitorSync() {
+        val app = getApplication<Application>()
+        val request = PeriodicWorkRequestBuilder<MonitorSyncWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(
+                Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+            )
+            .build()
+        WorkManager.getInstance(app).enqueueUniquePeriodicWork(
+            "monitor_sync",
+            ExistingPeriodicWorkPolicy.KEEP,
+            request
+        )
     }
 
     override fun onCleared() {

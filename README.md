@@ -1,9 +1,9 @@
-# TB MedTrack
+# MedTrack
 
 **Your personal medication reminder.** A private, offline-first Android app to remind you about
-and record the TB medicines *you* enter, according to schedules *you* set.
+and record the medicines *you* enter, according to schedules *you* set.
 
-> TB MedTrack is a personal medication reminder and tracking tool. It does **not** provide medical
+> MedTrack is a personal medication reminder and tracking tool. It does **not** provide medical
 > advice, does not decide which medicines or doses are correct, and does not replace your healthcare
 > professional's instructions. Enter and follow your prescribed medication schedule.
 
@@ -20,7 +20,7 @@ and record the TB medicines *you* enter, according to schedules *you* set.
 - Monthly calendar with per-day adherence indicators (icons + colour, never colour alone)
 - Daily and per-medicine history generated only from recorded events (never fabricated)
 - Statistics: adherence %, taken / missed / late, current & best streak, totals, average delay
-- Treatment progress ("Day N") and a "My TB Treatment" regimen overview
+- Treatment progress ("Day N") and a "My Treatment" regimen overview
 - Light / Dark / System theme, week starts Monday or Sunday
 - JSON backup export & import (replace-on-import with confirmation)
 - Works fully offline — no account, no cloud, no server, no analytics. All data stays on the device.
@@ -122,7 +122,7 @@ Output: `app/build/outputs/apk/release/app-release.apk`
 
 - **Notifications (Android 13+):** the app requests `POST_NOTIFICATIONS` after onboarding. If you
   deny it, reminders will still be scheduled but no notification will appear until you enable
-  notifications for TB MedTrack in system settings.
+  notifications for MedTrack in system settings.
 - **Exact alarms (Android 12+):** the app uses exact alarms for on-time reminders and requests the
   `SCHEDULE_EXACT_ALARM` / `USE_EXACT_ALARM` capability. If exact alarms are unavailable, it falls
   back to inexact-but-reliable `setAndAllowWhileIdle` scheduling so reminders still fire.
@@ -136,9 +136,9 @@ transmitted anywhere by default. Use **Settings -> Export backup** to save a JSO
 
 ---
 
-## MDR-TB adherence features
+## Adherence features
 
-This build is tailored for a personal MDR-TB regimen while keeping every value editable:
+This build is tailored for a personal medication regimen while keeping every value editable:
 
 - **Seeded regimen (editable):** On first launch it creates Linezolid 600 mg, Moxifloxacin 400 mg,
   Pretomanid 200 mg at 10:00 AM daily; Bedaquiline 100 mg with the rule *every day for the first 14
@@ -159,7 +159,7 @@ This build is tailored for a personal MDR-TB regimen while keeping every value e
 
 ### Reliability caveat (please read)
 
-For a life-important MDR-TB regimen, do not rely on any phone app as your only safeguard. Android
+For a life-important medication regimen, do not rely on any phone app as your only safeguard. Android
 and, especially, manufacturer battery managers (Xiaomi/MIUI, Samsung, Oppo/ColorOS, Huawei, etc.)
 can delay or kill background alarms. The app requests exact-alarm and notification permissions and
 offers a battery-optimization shortcut in Settings, and it uses the strongest reliably-available
@@ -177,7 +177,7 @@ single device, and the Devices screen explains this.
 
 # Multi-device sync, Turso & backend
 
-TB MedTrack is **local-first**: Room is the operational database and the app is fully functional
+MedTrack is **local-first**: Room is the operational database and the app is fully functional
 offline (reminders, escalating alarms, mark/revert, history, calendar, statistics). Cloud sync and
 family monitoring are an **optional layer** that activates once you deploy the backend.
 
@@ -289,7 +289,7 @@ Secrets are excluded via `.gitignore` (`.env`, `*.keystore`, `*.jks`, `google-se
 ```bash
 git init
 git add .
-git commit -m "Initial TB MedTrack application"
+git commit -m "Initial MedTrack application"
 git branch -M main
 git remote add origin https://github.com/HARISH219/medicineapp.git
 # if the remote already exists:  git remote set-url origin https://github.com/HARISH219/medicineapp.git

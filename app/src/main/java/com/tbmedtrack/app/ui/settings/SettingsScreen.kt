@@ -133,7 +133,7 @@ fun SettingsScreen(
                 Text("Critical reminders", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "For your MDR-TB dose, TB MedTrack escalates to an hourly full-screen alarm " +
+                    "For your critical dose, MedTrack escalates to an hourly full-screen alarm " +
                         "until you press MEDICINE TAKEN. For this to work reliably, please grant " +
                         "exact-alarm and notification permissions, and exempt the app from battery " +
                         "optimization. Some phones (Xiaomi, Samsung, Oppo, etc.) may still limit " +
@@ -356,12 +356,12 @@ fun SettingsScreen(
             SectionCard {
                 Text("About", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(6.dp))
-                Text("TB MedTrack", style = MaterialTheme.typography.bodyLarge)
+                Text("MedTrack", style = MaterialTheme.typography.bodyLarge)
                 Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "TB MedTrack is a personal medication reminder and tracking tool. It does not " +
+                    "MedTrack is a personal medication reminder and tracking tool. It does not " +
                         "provide medical advice or replace your healthcare professional's instructions. " +
                         "Enter and follow your prescribed medication schedule.",
                     style = MaterialTheme.typography.bodyMedium,

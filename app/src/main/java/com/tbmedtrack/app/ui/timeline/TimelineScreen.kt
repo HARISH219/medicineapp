@@ -83,7 +83,7 @@ fun TimelineScreen() {
     ) {
         item {
             SectionCard {
-                Text("TB TREATMENT", style = MaterialTheme.typography.labelLarge,
+                Text("TREATMENT", style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(4.dp))
                 startDate?.let {

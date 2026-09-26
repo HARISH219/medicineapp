@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 
 /**
- * Seeds the specific MDR-TB regimen once, on first launch. Everything created here is
+ * Seeds the specific regimen once, on first launch. Everything created here is
  * an ordinary editable record — the user can change or delete any of it. The app does
  * not treat these drugs/doses as medically authoritative; it only follows the schedule.
  *

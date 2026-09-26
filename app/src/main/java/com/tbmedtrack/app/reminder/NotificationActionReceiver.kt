@@ -28,6 +28,10 @@ class NotificationActionReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val appSettings = ServiceLocator.settingsRepository(context).settings.first()
+                if (!appSettings.setupWizardDone ||
+                    appSettings.deviceRole != com.tbmedtrack.app.data.settings.DeviceRoleValue.MAIN
+                ) return@launch
                 val repo = ServiceLocator.medRepository(context)
                 when (action) {
                     ReminderKeys.ACTION_MARK_EVENT_TAKEN -> {

@@ -1,4 +1,4 @@
-// TB MedTrack sync backend — Express app (shared by local/Railway server.js and Vercel).
+// MedTrack sync backend — Express app (shared by local/Railway server.js and Vercel).
 //
 // Responsibilities:
 //  - Hold the Turso token (env var, never in the app) and talk to Turso over libSQL.
@@ -147,7 +147,7 @@ app.get("/", (_req, res) => {
 // Machine-readable status (the old JSON root).
 app.get("/status", (_req, res) =>
   res.json({
-    service: "TB MedTrack sync backend",
+    service: "MedTrack sync backend",
     status: "ok",
     endpoints: ["/health", "/status", "/stats", "/system", "/devices", "/preview", "/v1/home-summary", "/v1/public-stats", "/v1/system-status", "/v1/system-revoke", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
   })
@@ -765,7 +765,7 @@ async function notifyMonitors(userId, e) {
     tokens,
     data: { type: taken ? "taken" : "not_recorded", uuid: e.uuid, status: e.status },
     notification: {
-      title: taken ? "✓ TB medication recorded" : "🚨 TB medication status changed",
+      title: taken ? "✓ Medication recorded" : "🚨 Medication status changed",
       body: taken ? "Medication was recorded as taken." : "Medication status changed — check the app.",
     },
   });
@@ -826,7 +826,7 @@ const BASE_CSS = `
 function landingHtml() {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>TB MedTrack — Backend Dashboard</title>
+<title>MedTrack — Backend Dashboard</title>
 <style>
   :root{
     --bg:#080D1D;--bg2:#0D1428;--card:#121A32;--card-h:#17213D;--line:#263252;
@@ -968,7 +968,7 @@ function landingHtml() {
   <header class="head">
     <div class="logo">💊</div>
     <div>
-      <h1>TB MedTrack <span class="livepill"><span class="dot" style="background:var(--green)"></span>Live</span></h1>
+      <h1>MedTrack <span class="livepill"><span class="dot" style="background:var(--green)"></span>Live</span></h1>
       <div class="sub">Medication sync backend</div>
     </div>
     <div class="spacer"></div>
@@ -979,7 +979,7 @@ function landingHtml() {
   <!-- Hero -->
   <section class="hero">
     <div class="card lead">
-      <h3>Private sync backend for TB MedTrack</h3>
+      <h3>Private sync backend for MedTrack</h3>
       <p>This backend securely stores medication events and keeps authorized devices synchronized.</p>
       <span class="chip"><span class="dot" style="background:var(--green)"></span>Backend operational</span>
     </div>
@@ -1061,7 +1061,7 @@ function landingHtml() {
 
   <!-- Quick access -->
   <section class="section">
-    <div class="sec-head"><span>🧩</span><h2>Quick Access</h2><span class="sub">Everything you need to manage TB MedTrack.</span></div>
+    <div class="sec-head"><span>🧩</span><h2>Quick Access</h2><span class="sub">Everything you need to manage MedTrack.</span></div>
     <div class="grid5">
       <a class="card qa" href="/devices"><div class="ic">📱</div><h4>Devices &amp; Sync <span class="arr">→</span></h4><p>Manage authorized devices and synchronization.</p></a>
       <a class="card qa" href="/stats"><div class="ic" style="background:var(--blue-soft);color:var(--blue)">📊</div><h4>Stats Dashboard <span class="arr">→</span></h4><p>View medication statistics.</p></a>
@@ -1089,7 +1089,7 @@ function landingHtml() {
     </div>
   </section>
 
-  <div class="foot">Made with ❤️ by Harish · TB MedTrack backend</div>
+  <div class="foot">Made with ❤️ by Harish · MedTrack backend</div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -1216,7 +1216,7 @@ function landingHtml() {
 function statsHtml() {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TB MedTrack — Stats</title><style>${BASE_CSS}</style></head>
+<title>MedTrack — Stats</title><style>${BASE_CSS}</style></head>
 <body><div class="wrap">
   <div class="brand"><div class="logo">📊</div><div><h1>Medication Stats</h1>
     <div class="muted" id="sub">Loading…</div></div></div>
@@ -1309,7 +1309,7 @@ function statsHtml() {
 function systemHtml() {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TB MedTrack — System status</title><style>${BASE_CSS}
+<title>MedTrack — System status</title><style>${BASE_CSS}
   table{width:100%;border-collapse:collapse;margin-top:6px}
   th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);font-size:14px}
   th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
@@ -2585,7 +2585,7 @@ function runSyncTest(){
 }
 
 function notify(kind){
-  var map={remind:["💊","Medication reminder","Your morning TB medicines are due at 10:00 AM."],
+  var map={remind:["💊","Medication reminder","Your morning medicines are due at 10:00 AM."],
     due:["⏰","Medicine due now","Morning dose is due. Tap to view."],
     critical:["🚨","Critical: medicine not taken","Morning dose is overdue. Please take it now."],
     taken:["✓","Medication recorded","Morning dose recorded as taken."]};
@@ -2611,7 +2611,7 @@ reseed(); render();
 function previewHtml() {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>TB MedTrack — App Preview</title>
+<title>MedTrack — App Preview</title>
 <style>
   :root{
     --bg:#0B1020;--bg2:#121A32;--panel:#131A30;--card:#161C33;--card2:#1E2643;--line:#2C3556;
@@ -2702,7 +2702,7 @@ function previewHtml() {
 <body>
 <div class="wrap" id="wrap">
   <div class="top">
-    <div class="brand"><div class="logo">💊</div><div><h1>TB MedTrack — App Preview</h1>
+    <div class="brand"><div class="logo">💊</div><div><h1>MedTrack — App Preview</h1>
       <div class="muted" style="font-size:12px">Browser test environment · <span class="badge prev">🧪 Preview Mode</span></div></div></div>
     <div style="flex:1"></div>
     <div class="seg" id="seg">

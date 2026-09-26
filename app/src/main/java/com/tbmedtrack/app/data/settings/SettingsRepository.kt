@@ -28,7 +28,7 @@ data class AppSettings(
     val treatmentStartDay: Long = 0L,
     /** bedtime / night-medicine time in minutes since midnight */
     val nightMedicineMinutes: Int = 22 * 60,
-    /** whether the seeded MDR-TB regimen has been created */
+    /** whether the seeded regimen has been created */
     val regimenSeeded: Boolean = false,
     /** epoch day active reminders begin; unlogged doses before this are never "missed". 0=all tracked */
     val trackingStartDay: Long = 0L,

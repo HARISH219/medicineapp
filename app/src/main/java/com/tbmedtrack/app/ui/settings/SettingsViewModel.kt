@@ -38,6 +38,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setNightMedicineMinutes(m: Int) = viewModelScope.launch {
         settings.setNightMedicineMinutes(m)
         ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
+        ServiceLocator.syncManager(getApplication()).queue()
     }
     fun setNotifyNotRecorded(v: Boolean) = viewModelScope.launch { settings.setNotifyNotRecorded(v) }
     fun setNotifyTaken(v: Boolean) = viewModelScope.launch { settings.setNotifyTaken(v) }
@@ -50,18 +51,24 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setCriticalStartDelay(m: Int) = viewModelScope.launch {
         settings.setCriticalStartDelayMinutes(m)
         ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
+        ServiceLocator.syncManager(getApplication()).queue()
     }
     fun setDefaultFoodGap(m: Int) = viewModelScope.launch {
         settings.setDefaultFoodGapMinutes(m)
         // Recompute food-gap chains for today with the new default.
         ServiceLocator.foodGapScheduler(getApplication()).rescheduleForToday()
+        ServiceLocator.syncManager(getApplication()).queue()
     }
     fun setCriticalGrace(m: Int) = viewModelScope.launch {
         settings.setCriticalGraceMinutes(m)
         ServiceLocator.foodGapScheduler(getApplication()).rescheduleForToday()
         ServiceLocator.criticalAlarmScheduler(getApplication()).rescheduleTodayAndFuture()
+        ServiceLocator.syncManager(getApplication()).queue()
     }
-    fun setEmergencyContact(number: String) = viewModelScope.launch { settings.setEmergencyContact(number) }
+    fun setEmergencyContact(number: String) = viewModelScope.launch {
+        settings.setEmergencyContact(number)
+        ServiceLocator.syncManager(getApplication()).queue()
+    }
 
     fun exportBackup(uri: Uri) = viewModelScope.launch {
         val result = backup.export(uri)
@@ -76,6 +83,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         _message.value = result.fold(
             onSuccess = {
                 scheduler.rescheduleAll()
+                ServiceLocator.syncManager(getApplication()).queue()
                 "Backup imported ($it medicines)"
             },
             onFailure = { "Import failed: ${it.message}" }
@@ -88,6 +96,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         db.auditDao().deleteAll()
         db.syncOperationDao().deleteAll()
         db.medicineDao().getAllMedicines().forEach { db.medicineDao().deleteMedicine(it) }
+        ServiceLocator.syncManager(getApplication()).queue()
         _message.value = "All data deleted"
     }
 

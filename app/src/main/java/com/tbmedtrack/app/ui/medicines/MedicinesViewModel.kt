@@ -31,6 +31,7 @@ class MedicinesViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 scheduler.cancelForMedicine(medicineId)
             }
+            ServiceLocator.syncManager(getApplication()).queue()
         }
     }
 
@@ -38,6 +39,7 @@ class MedicinesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             scheduler.cancelForMedicine(medicineId)
             repo.deleteMedicine(medicineId)
+            ServiceLocator.syncManager(getApplication()).queue()
         }
     }
 }

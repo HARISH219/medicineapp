@@ -82,7 +82,7 @@ fun MedicinesScreen(
         val other = meds.filter { !it.medicine.partOfTbRegimen }
         if (tb.isNotEmpty()) {
             item {
-                Text("My TB Treatment", style = MaterialTheme.typography.titleLarge)
+                Text("My Treatment", style = MaterialTheme.typography.titleLarge)
             }
             items(tb, key = { it.medicine.id }) { m ->
                 MedicineCard(m, onEdit, onHistory,

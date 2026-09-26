@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "TB MedTrack"
+rootProject.name = "MedTrack"
 include(":app")

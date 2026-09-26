@@ -1,12 +1,15 @@
 package com.tbmedtrack.app
 
 import android.app.Application
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.tbmedtrack.app.data.RegimenSeeder
 import com.tbmedtrack.app.reminder.AlarmHealthWorker
 import com.tbmedtrack.app.reminder.NotificationHelper
+import com.tbmedtrack.app.sync.MonitorSyncWorker
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,21 +29,30 @@ class TbMedApplication : Application() {
             runCatching {
                 // Register this device (PRIMARY on first install).
                 ServiceLocator.deviceRepository(this@TbMedApplication).ensureRegistered()
-                // Seed the MDR-TB regimen on first launch (editable records).
                 val repo = ServiceLocator.medRepository(this@TbMedApplication)
                 val settings = ServiceLocator.settingsRepository(this@TbMedApplication)
-                RegimenSeeder(repo, settings).seedIfNeeded()
-                // Load the active tracking start so past unconfigured days are never "missed".
                 val appSettings = settings.settings.first()
+                val isPrimaryReady = appSettings.setupWizardDone && appSettings.deviceRole ==
+                    com.tbmedtrack.app.data.settings.DeviceRoleValue.MAIN
+                // Never seed an independent regimen on a monitoring or undecided device.
+                if (isPrimaryReady) RegimenSeeder(repo, settings).seedIfNeeded()
+                // Load the active tracking start so past unconfigured days are never "missed".
                 repo.trackingStartDay = appSettings.trackingStartDay
-                val isSecondary = appSettings.deviceRole ==
-                    com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY
-                // A SECONDARY (monitoring) device must NOT schedule normal reminders, food
-                // reminders, or its own critical escalation — it only monitors synced state.
-                if (!isSecondary) {
+                // Only a completed MAIN setup owns reminders and the alarm-health worker.
+                if (isPrimaryReady) {
                     ServiceLocator.alarmScheduler(this@TbMedApplication).rescheduleAll()
                     ServiceLocator.criticalAlarmScheduler(this@TbMedApplication).rescheduleTodayAndFuture()
                     ServiceLocator.foodGapScheduler(this@TbMedApplication).rescheduleForToday()
+                    scheduleAlarmHealthCheck()
+                    WorkManager.getInstance(this@TbMedApplication)
+                        .cancelUniqueWork("monitor_sync")
+                } else {
+                    WorkManager.getInstance(this@TbMedApplication)
+                        .cancelUniqueWork("alarm_health_check")
+                    val isMonitorReady = appSettings.setupWizardDone && appSettings.deviceRole ==
+                        com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY
+                    if (isMonitorReady) scheduleMonitorSync()
+                    else WorkManager.getInstance(this@TbMedApplication).cancelUniqueWork("monitor_sync")
                 }
                 // Both roles sync (the secondary pulls status; the main pushes events).
                 ServiceLocator.syncManager(this@TbMedApplication).reconfigure()
@@ -49,8 +61,19 @@ class TbMedApplication : Application() {
                 com.tbmedtrack.app.widget.MedTrackWidgetProvider.updateAllWidgets(this@TbMedApplication)
             }
         }
+    }
 
-        scheduleAlarmHealthCheck()
+    private fun scheduleMonitorSync() {
+        val request = PeriodicWorkRequestBuilder<MonitorSyncWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(
+                Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+            )
+            .build()
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "monitor_sync",
+            ExistingPeriodicWorkPolicy.KEEP,
+            request
+        )
     }
 
     /**

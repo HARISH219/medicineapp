@@ -7,7 +7,7 @@ import java.time.LocalDate
 
 /**
  * A "combination" is the set of medicines required at one clock time on a given day.
- * For this MDR-TB regimen the key event is the 10:00 AM combination, whose size
+ * For this regimen the key event is the 10:00 AM combination, whose size
  * changes over time (4 medicines during the first 14 days and on Mon/Wed/Fri after
  * that, otherwise 3).
  *

@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">TB MedTrack</string>
+    <string name="app_name">MedTrack</string>
     <string name="widget_description">A cute companion showing your daily medication progress.</string>
 </resources>

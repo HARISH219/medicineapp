@@ -33,7 +33,7 @@ private data class Page(val emoji: String, val title: String, val body: String)
 @Composable
 fun OnboardingScreen(onFinished: () -> Unit) {
     val pages = listOf(
-        Page("💊", "TB MedTrack", "Your personal medication reminder. Keep track of every scheduled dose."),
+        Page("💊", "MedTrack", "Your personal medication reminder. Keep track of every scheduled dose."),
         Page("⏰", "Set reminders", "Create your own medication schedule and get reliable reminders — even when the app is closed."),
         Page("📊", "Track your progress", "See your medication history, calendar and adherence, all stored privately on your phone.")
     )

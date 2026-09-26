@@ -50,7 +50,7 @@ fun SetupScreen(onDone: () -> Unit, vm: SetupViewModel = viewModel()) {
         Modifier.fillMaxSize().padding(20.dp).verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text("Welcome to TB MedTrack", style = MaterialTheme.typography.headlineMedium)
+        Text("Welcome to MedTrack", style = MaterialTheme.typography.headlineMedium)
         Text(
             "Let's set up your treatment. You control every date and dose — the app only follows " +
                 "the schedule you keep.",

@@ -67,6 +67,35 @@ class RemoteSyncClient(private val store: SecureStore) : SyncClient {
         val devices: List<DeviceStatusDto> = emptyList()
     )
 
+    @Serializable
+    private data class MonitorDoseDto(
+        val occurrenceId: String,
+        val medicineName: String,
+        val doseText: String,
+        val scheduledAt: Long,
+        val scheduledEpochDay: Long,
+        val status: String,
+        val takenAt: Long? = null,
+        val eligibleAt: Long,
+        val criticalAt: Long
+    )
+
+    @Serializable
+    private data class MonitorFoodDto(
+        val uuid: String,
+        val foodAt: Long,
+        val recordedAt: Long,
+        val gapMinutes: Int = 0
+    )
+
+    @Serializable
+    private data class MonitorSnapshotDto(
+        val version: Long = 0,
+        val doses: List<MonitorDoseDto> = emptyList(),
+        val foodEvents: List<MonitorFoodDto> = emptyList(),
+        val emergencyContact: String = ""
+    )
+
     override suspend fun uploadEvents(events: List<MedicationLog>): Result<List<String>> =
         withContext(Dispatchers.IO) {
             if (events.isEmpty()) return@withContext Result.success(emptyList())
@@ -136,6 +165,43 @@ class RemoteSyncClient(private val store: SecureStore) : SyncClient {
             )
         }
     }
+
+    override suspend fun uploadMonitorSnapshot(snapshot: MonitorSnapshot): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val dto = MonitorSnapshotDto(
+                    version = snapshot.version,
+                    doses = snapshot.doses.map {
+                        MonitorDoseDto(
+                            it.occurrenceId, it.medicineName, it.doseText, it.scheduledAt,
+                            it.scheduledEpochDay, it.status, it.takenAt, it.eligibleAt, it.criticalAt
+                        )
+                    },
+                    foodEvents = snapshot.foodEvents.map { MonitorFoodDto(it.uuid, it.foodAt, it.recordedAt, it.gapMinutes) },
+                    emergencyContact = snapshot.emergencyContact
+                )
+                post("/v1/monitor-snapshot", json.encodeToString(dto))
+                Unit
+            }
+        }
+
+    override suspend fun downloadMonitorSnapshot(): Result<MonitorSnapshot> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val r = json.decodeFromString<MonitorSnapshotDto>(get("/v1/monitor-snapshot"))
+                MonitorSnapshot(
+                    version = r.version,
+                    doses = r.doses.map {
+                        MonitorDose(
+                            it.occurrenceId, it.medicineName, it.doseText, it.scheduledAt,
+                            it.scheduledEpochDay, it.status, it.takenAt, it.eligibleAt, it.criticalAt
+                        )
+                    },
+                    foodEvents = r.foodEvents.map { MonitorFoodEvent(it.uuid, it.foodAt, it.recordedAt, it.gapMinutes) },
+                    emergencyContact = r.emergencyContact
+                )
+            }
+        }
 
     // --- HTTP helpers ---
 

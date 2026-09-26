@@ -314,7 +314,7 @@ private fun topTitle(route: String?): String = when {
     route?.startsWith(Routes.HISTORY) == true -> "History"
     route?.startsWith(Routes.MEDICINE_HISTORY) == true -> "Medicine history"
     route?.startsWith(Routes.EVENT_DETAIL) == true -> "Dose details"
-    route == Routes.TREATMENT -> "My TB Treatment"
+    route == Routes.TREATMENT -> "My Treatment"
     route == Routes.DEVICES -> "Authorized devices"
     route == Routes.MONITOR -> "Monitor"
     route == Routes.TIMELINE -> "Treatment timeline"
@@ -323,5 +323,5 @@ private fun topTitle(route: String?): String = when {
     route == Routes.FOOD_HISTORY -> "Food timing history"
     route == Routes.MEDICINES -> "My medicines"
     route?.startsWith(Routes.PHASE_PREVIEW) == true -> "Schedule preview"
-    else -> "TB MedTrack"
+    else -> "MedTrack"
 }

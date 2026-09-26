@@ -39,6 +39,11 @@ class SyncManager(private val context: Context) {
     private val _status = MutableStateFlow(SyncStatus())
     val status: StateFlow<SyncStatus> = _status.asStateFlow()
 
+    /** Authoritative primary-authored projection consumed by the read-only monitor UI. */
+    private val monitorSnapshotStore = MonitorSnapshotStore(context)
+    private val _monitorSnapshot = MutableStateFlow(monitorSnapshotStore.load())
+    val monitorSnapshot: StateFlow<MonitorSnapshot> = _monitorSnapshot.asStateFlow()
+
     /** True if the device currently has a validated internet connection. */
     private fun isOnline(): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -103,10 +108,7 @@ class SyncManager(private val context: Context) {
         reconfigure()
         if (!client.isConfigured && secureStore.baseUrl.isNullOrBlank()) return false
         val redeemed = client.redeemAuthCode(code, deviceName).isSuccess
-        if (redeemed) {
-            reconfigure() // now has a session token -> becomes a real RemoteSyncClient
-            runCatching { syncNow() }
-        }
+        if (redeemed) reconfigure() // caller persists MONITOR role before the first sync
         return redeemed
     }
 
@@ -129,10 +131,13 @@ class SyncManager(private val context: Context) {
         if (!secureStore.sessionToken.isNullOrBlank()) return // already signed in
         if (!isOnline()) return
 
-        val role = runCatching {
-            com.tbmedtrack.app.ServiceLocator.settingsRepository(context).settings.first().deviceRole
-        }.getOrDefault("")
-        if (role == com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY) return
+        val appSettings = runCatching {
+            com.tbmedtrack.app.ServiceLocator.settingsRepository(context).settings.first()
+        }.getOrNull() ?: return
+        // Never bootstrap an undecided setup or a monitoring device as a new PRIMARY account.
+        if (!appSettings.setupWizardDone ||
+            appSettings.deviceRole != com.tbmedtrack.app.data.settings.DeviceRoleValue.MAIN
+        ) return
 
         val deviceRepo = com.tbmedtrack.app.ServiceLocator.deviceRepository(context)
         runCatching {
@@ -171,7 +176,34 @@ class SyncManager(private val context: Context) {
                 return
             }
 
+            val appRole = runCatching {
+                com.tbmedtrack.app.ServiceLocator.settingsRepository(context).settings.first().deviceRole
+            }.getOrDefault("")
+            val isMonitor = appRole == com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY
+
             publishStatus(SyncPhase.SYNCING)
+
+            // MONITOR devices are strictly read-only. They neither upload local leftovers nor
+            // merge remote events into the primary-domain Room table (whose local IDs collide).
+            // Instead they download the concrete snapshot authored by the PRIMARY.
+            if (isMonitor) {
+                var monitorError = false
+                runCatching {
+                    val downloaded = client.downloadMonitorSnapshot().getOrThrow()
+                    check(monitorSnapshotStore.save(downloaded)) { "Could not save monitor data" }
+                    _monitorSnapshot.value = downloaded
+                    meta.lastDownloadAt = System.currentTimeMillis()
+                }.onFailure { monitorError = true }
+                runCatching {
+                    client.syncStatus().getOrNull()?.let { s ->
+                        meta.cloudVersion = maxOf(meta.cloudVersion, s.cloudVersion)
+                        meta.connectedDevices = s.devices.count { !it.isThisDevice }
+                    }
+                }
+                publishStatus(if (monitorError) SyncPhase.ERROR else SyncPhase.SYNCED)
+                return
+            }
+
             var errored = false
 
             // Upload events. Idempotent: the server upserts by uuid, so replays are safe.
@@ -218,6 +250,9 @@ class SyncManager(private val context: Context) {
                     meta.connectedDevices = s.devices.count { !it.isThisDevice }
                 }
             }
+
+            // Publish the primary-authored schedule/history/food projection for monitor devices.
+            runCatching { publishMonitorSnapshot() }.onFailure { errored = true }
 
             // Refresh widgets so a monitor device reflects the newly-synced status.
             if (changed) {
@@ -313,6 +348,78 @@ class SyncManager(private val context: Context) {
      * Merge a remote event with the local copy using append-oriented, TAKEN-authoritative
      * rules: never downgrade a locally-recorded "taken" event.
      */
+    /**
+     * Materialize a bounded read-only monitor projection from the primary's authoritative Room
+     * schedule. Snapshot replacement is idempotent, so publishing on every meaningful sync keeps
+     * food and medication state current without a lossy throttle window.
+     */
+    private suspend fun publishMonitorSnapshot() {
+        val now = System.currentTimeMillis()
+
+        val settingsRepo = com.tbmedtrack.app.ServiceLocator.settingsRepository(context)
+        val appSettings = settingsRepo.settings.first()
+        if (appSettings.deviceRole == com.tbmedtrack.app.data.settings.DeviceRoleValue.SECONDARY) return
+
+        val medRepo = com.tbmedtrack.app.ServiceLocator.medRepository(context)
+        val foodRepo = com.tbmedtrack.app.ServiceLocator.foodRepository(context)
+        val deviceId = com.tbmedtrack.app.ServiceLocator.deviceRepository(context).deviceId
+        val today = com.tbmedtrack.app.util.ScheduleUtil.today()
+        val doses = mutableListOf<MonitorDose>()
+        val medicineCache = mutableMapOf<Long, com.tbmedtrack.app.data.db.Medicine?>()
+
+        // Thirty days of readable history plus the next seven days of concrete schedule.
+        for (offset in -30L..7L) {
+            val day = today.plusDays(offset)
+            for (dose in medRepo.getDosesForDay(day)) {
+                val medicine = if (medicineCache.containsKey(dose.medicineId)) {
+                    medicineCache[dose.medicineId]
+                } else {
+                    medRepo.getMedicine(dose.medicineId).also { medicineCache[dose.medicineId] = it }
+                }
+                val timing = medicine?.let { foodRepo.timingFor(it, dose.scheduledMillis) }
+                val adjustedTiming = timing?.takeIf { it.foodAdjusted }
+                val eligibleAt = adjustedTiming?.eligibleMillis ?: dose.scheduledMillis
+                val criticalAt = adjustedTiming?.criticalStartMillis
+                    ?: dose.scheduledMillis + appSettings.criticalStartDelayMinutes.coerceAtLeast(5) * 60_000L
+                // getDosesForDay derives MISSED from the raw schedule for rows with no stored
+                // event. Do not publish that derived miss before a food-adjusted critical time.
+                val publishedStatus = if (dose.logId == null && now < criticalAt) {
+                    com.tbmedtrack.app.data.db.DoseStatus.SCHEDULED.name
+                } else {
+                    dose.status.name
+                }
+                doses += MonitorDose(
+                    occurrenceId = "$deviceId:${dose.medicineId}:${dose.scheduleId}:${dose.scheduledMillis}",
+                    medicineName = dose.medicineName,
+                    doseText = dose.doseText,
+                    scheduledAt = dose.scheduledMillis,
+                    scheduledEpochDay = dose.epochDay,
+                    status = publishedStatus,
+                    takenAt = dose.takenAtMillis,
+                    eligibleAt = eligibleAt,
+                    criticalAt = criticalAt
+                )
+            }
+        }
+        val defaultGap = runCatching { appSettings.defaultFoodGapMinutes }.getOrDefault(0)
+        val foods = foodRepo.recentFoodEvents(90).map {
+            MonitorFoodEvent(
+                uuid = it.uuid,
+                foodAt = it.foodTimeMillis,
+                recordedAt = it.recordedAt,
+                gapMinutes = defaultGap
+            )
+        }
+        client.uploadMonitorSnapshot(
+            MonitorSnapshot(
+                version = now,
+                doses = doses,
+                foodEvents = foods,
+                emergencyContact = appSettings.emergencyContact
+            )
+        ).getOrThrow()
+    }
+
     private suspend fun mergeRemote(remote: com.tbmedtrack.app.data.db.MedicationLog): Boolean {
         val db = AppDatabase.get(context)
         val local = db.logDao().getByUuid(remote.uuid)
