@@ -149,7 +149,7 @@ app.get("/status", (_req, res) =>
   res.json({
     service: "TB MedTrack sync backend",
     status: "ok",
-    endpoints: ["/health", "/status", "/stats", "/system", "/devices", "/preview", "/v1/public-stats", "/v1/system-status", "/v1/system-revoke", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
+    endpoints: ["/health", "/status", "/stats", "/system", "/devices", "/preview", "/v1/home-summary", "/v1/public-stats", "/v1/system-status", "/v1/system-revoke", "/v1/devices/auth-code", "/v1/devices/redeem", "/v1/events", "/v1/sync-status"],
   })
 );
 
@@ -160,6 +160,67 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 function statsKeyOk(req) {
   return !!STATS_KEY && req.query.key === STATS_KEY;
 }
+
+// PUBLIC (no key) aggregate summary for the homepage. Returns ONLY non-identifying counts —
+// no medicine names, no device ids, no per-event details — so it is safe to expose openly.
+app.get("/v1/home-summary", asyncRoute(async (req, res) => {
+  await ensureSchema().catch(() => {});
+  const out = {
+    generatedAt: Date.now(),
+    ok: false,
+    latencyMs: -1,
+    cloudVersion: 0,
+    taken: 0, missed: 0, pending: 0, lateTaken: 0, totalEvents: 0,
+    adherencePercent: 0,
+    devices: { primary: 0, monitor: 0, total: 0 },
+    days: [],
+  };
+  try {
+    const t0 = Date.now();
+    const [evRows, verRow, devRows] = await Promise.all([
+      db.execute("SELECT status, scheduled_at, taken_at FROM medication_events"),
+      db.execute(`SELECT MAX(
+        COALESCE((SELECT MAX(updated_at) FROM medication_events),0),
+        COALESCE((SELECT MAX(version) FROM monitor_snapshot_meta),0)) AS v`),
+      db.execute("SELECT role, COUNT(*) AS c FROM devices WHERE revoked = 0 GROUP BY role"),
+    ]);
+    out.latencyMs = Date.now() - t0;
+    out.ok = true;
+    out.cloudVersion = Number(verRow.rows[0]?.v || 0);
+
+    const events = evRows.rows;
+    out.totalEvents = events.length;
+    let taken = 0, missed = 0, pending = 0, lateTaken = 0;
+    const byDay = new Map();
+    for (const e of events) {
+      if (e.status === "TAKEN") taken++;
+      else if (e.status === "MISSED" || e.status === "SKIPPED") missed++;
+      else if (e.status === "SCHEDULED") pending++;
+      if (e.status === "TAKEN" && e.taken_at && e.scheduled_at && e.taken_at - e.scheduled_at > 60 * 60 * 1000) lateTaken++;
+      const day = new Date(Number(e.scheduled_at)).toISOString().slice(0, 10);
+      const d = byDay.get(day) || { day, taken: 0, missed: 0, total: 0 };
+      d.total++;
+      if (e.status === "TAKEN") d.taken++;
+      else if (e.status === "MISSED" || e.status === "SKIPPED") d.missed++;
+      byDay.set(day, d);
+    }
+    out.taken = taken; out.missed = missed; out.pending = pending; out.lateTaken = lateTaken;
+    const recorded = taken + missed;
+    out.adherencePercent = recorded > 0 ? Math.round((taken / recorded) * 100) : 0;
+    out.days = [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day)).slice(-30);
+
+    let primary = 0, monitor = 0;
+    for (const r of devRows.rows) {
+      if (r.role === "PRIMARY") primary = Number(r.c);
+      else monitor += Number(r.c);
+    }
+    out.devices = { primary, monitor, total: primary + monitor };
+  } catch (e) {
+    out.ok = false;
+    out.error = "unavailable";
+  }
+  res.json(out);
+}));
 
 // The HTML dashboard page. It fetches /v1/public-stats?key=... client-side.
 app.get("/stats", (req, res) => {
@@ -1077,23 +1138,23 @@ function landingHtml() {
     });
   }
 
+  // Drives the System Status cards from the PUBLIC /v1/home-summary payload.
   function applyStatus(d){
-    function chk(name){ return (d.checks||[]).find(function(c){return c.name===name;}); }
-    var api=chk("Vercel API"), dbc=chk("Turso database"), cloud=chk("Cloud sync");
-    setState("apiState", !api||api.status==="ok", "Online", "Degraded");
-    setState("dbState", !dbc||dbc.status==="ok", "Connected", "Issue");
-    setState("syncState", !cloud||cloud.status==="ok", "Active", "Behind");
-    document.getElementById("apiMs").textContent = "120 ms";
+    var ok = d.ok !== false;
+    var slow = d.latencyMs >= 0 && d.latencyMs > 800;
+    setState("apiState", ok, "Online", "Unavailable");
+    setState("dbState", ok, "Connected", "Unavailable");
+    setState("syncState", ok, "Active", "Idle");
+    document.getElementById("apiMs").textContent = ok ? "120 ms" : "—";
     document.getElementById("dbMs").textContent = (d.latencyMs>=0? d.latencyMs+" ms" : "—");
     document.getElementById("cloudVer").textContent = "#"+(d.cloudVersion||0);
-    var devs=d.devices||[];
-    var primary=devs.filter(function(x){return x.role==="PRIMARY";}).length;
-    var monitor=devs.filter(function(x){return x.role!=="PRIMARY";}).length;
-    document.getElementById("devCount").textContent = devs.length+" device"+(devs.length===1?"":"s");
-    document.getElementById("devBreak").textContent = primary+" Primary \u2022 "+monitor+" Monitoring";
-    var overall = d.overall==="ok" ? "All systems operational" : d.overall==="warn" ? "Minor issues detected" : "System problem";
+    var dev = d.devices || {primary:0,monitor:0,total:0};
+    document.getElementById("devCount").textContent = (dev.total||0)+" device"+((dev.total===1)?"":"s");
+    document.getElementById("devBreak").textContent = (dev.primary||0)+" Primary \u2022 "+(dev.monitor||0)+" Monitoring";
+    var overallOk = ok && !slow;
+    var overall = !ok ? "Backend unavailable" : slow ? "Minor issues detected" : "All systems operational";
     var oc=document.getElementById("overallChip");
-    oc.innerHTML='<span class="dot" style="background:'+(d.overall==="ok"?"var(--green)":d.overall==="warn"?"var(--amber)":"var(--red)")+'"></span>'+overall;
+    oc.innerHTML='<span class="dot" style="background:'+(overallOk?"var(--green)":ok?"var(--amber)":"var(--red)")+'"></span>'+overall;
     document.getElementById("lastCheck").textContent = fmtTime(d.generatedAt||Date.now());
   }
 
@@ -1104,18 +1165,14 @@ function landingHtml() {
     document.getElementById("uptime").textContent = dd+"d "+hh+"h "+mm+"m";
   }
 
+  // One public fetch drives both the System Status cards and the Medication Statistics
+  // section — no access key required.
   function refresh(){
     document.getElementById("updated").textContent = fmtNow(Date.now());
     var ic=document.getElementById("refreshIc"); ic.textContent="\u27F3";
-    if(typeof loadStats==="function") loadStats();
-    if(!KEY){
-      applyStatus({overall:"ok", latencyMs:-1, cloudVersion:0, devices:[], checks:[], generatedAt:Date.now()});
-      setTimeout(function(){ ic.textContent="\u21BB"; }, 400);
-      return;
-    }
-    fetch("/v1/system-status?key="+encodeURIComponent(KEY)).then(function(r){ if(!r.ok) throw new Error("x"); return r.json(); })
-      .then(function(d){ applyStatus(d); })
-      .catch(function(){ applyStatus({overall:"ok", latencyMs:-1, cloudVersion:0, devices:[], checks:[], generatedAt:Date.now()}); })
+    fetch("/v1/home-summary").then(function(r){ if(!r.ok) throw new Error("x"); return r.json(); })
+      .then(function(d){ applyStatus(d); renderStats(d); })
+      .catch(function(){ applyStatus({ok:false, latencyMs:-1, cloudVersion:0, devices:{primary:0,monitor:0,total:0}, generatedAt:Date.now()}); })
       .finally(function(){ ic.textContent="\u21BB"; });
   }
 
@@ -1145,25 +1202,13 @@ function landingHtml() {
       wrap.appendChild(bar);
     });
   }
-  function statsNeedKey(){
-    document.getElementById("adhPct").textContent="—";
-    document.getElementById("statBars").innerHTML="";
-    var n=document.getElementById("statsNote"); n.style.display="block";
-    n.innerHTML='Medication statistics require the access key. Open <b>/?key=&lt;STATS_KEY&gt;</b> to view live numbers.';
-  }
-  function loadStats(){
-    if(!KEY){ statsNeedKey(); return; }
-    document.getElementById("statsNote").style.display="none";
-    document.getElementById("statsFullLink").href = "/stats?key=" + encodeURIComponent(KEY);
-    fetch("/v1/public-stats?key="+encodeURIComponent(KEY)).then(function(r){ if(!r.ok) throw new Error("x"); return r.json(); })
-      .then(function(s){ renderStats(s); })
-      .catch(function(){ var n=document.getElementById("statsNote"); n.style.display="block"; n.textContent="Could not load statistics."; });
-  }
+  if(KEY) document.getElementById("statsFullLink").href = "/stats?key=" + encodeURIComponent(KEY);
 
   renderApi();
   refresh();
-  loadStats();
   tickUptime(); setInterval(tickUptime, 30000);
+  // Auto-refresh live numbers every 60s.
+  setInterval(refresh, 60000);
 </script>
 </body></html>`;
 }
